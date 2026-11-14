@@ -18,6 +18,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # No debug info in CI builds: they compile, link and cache faster and
+  # smaller, and a failing test still reports its file and line.
+  CARGO_PROFILE_DEV_DEBUG: "0"
   # Pinned so the Rust build cache keeps matching: each new stable release
   # changes its key and the next run compiles everything from scratch.
   # Raise it on purpose, in its own change.
