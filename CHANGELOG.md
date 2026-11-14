@@ -9,6 +9,32 @@ have their own versions and are listed under Compatibility.
 ## [Unreleased]
 
 ### Added
+- None.
+
+### Changed
+- None.
+
+### Fixed
+- None.
+
+### Security
+- None.
+
+### Compatibility
+- None.
+
+### Provider changes
+- None.
+
+### Migration notes
+- None.
+
+### Known limitations
+- None.
+
+## [0.2.0] - 2026-11-14
+
+### Added
 - Find in file previews: ⌘F (Ctrl+F) on desktop searches text, Markdown,
   Word, spreadsheets and PDFs; replace (⌘⌥F, Ctrl+H) changes text files and
   CSV/TSV, written only on Save. Mobile finds in text files.
