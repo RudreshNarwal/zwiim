@@ -85,8 +85,9 @@ jobs:
         run: cargo clippy -p zwiim-host -p zwiim-cloud -p zwiim-desktop --all-targets -- -D clippy::correctness -D clippy::suspicious
       - name: Host unit + protocol + compatibility + update tests
         run: cargo test -p zwiim-host --lib
+      # Only runtime/host/tests: `--tests` would run the unit tests again.
       - name: Host integration (lifecycle, restart, migrations)
-        run: cargo test -p zwiim-host --tests
+        run: cargo test -p zwiim-host --test '*'
       - name: Cloud
         run: cargo test -p zwiim-cloud
       - name: Desktop shell
