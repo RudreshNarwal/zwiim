@@ -853,3 +853,116 @@ fn claude_counts_as_signed_in_with_a_key_credentials_file_or_keychain_item() {
         "file"
     );
 }
+
+// ─── native adapters ────────────────────────────────────────────────────
+
+/// An adapter that is its own executable: it answers `initialize` only when
+/// started as `<bin> acp`.
+fn native_script(version: &str) -> String {
+    format!(
+        "#!/bin/sh\n[ \"$1\" = acp ] || exit 3\n{}",
+        adapter_script(version, true)
+    )
+}
+
+impl World {
+    /// Publish a native `opencode` release: one binary package for this
+    /// platform and one for another, both extracted to `opencode/`.
+    fn publish_native(&self, v: &str) -> Lock {
+        let here = targz(&[
+            ("package/package.json", 0o644, "{}"),
+            ("package/bin/opencode", 0o755, &native_script(v)),
+        ]);
+        let url = format!("https://registry.test/opencode-here-{v}.tgz");
+        let elsewhere_os = if self.platform.os == "darwin" {
+            "linux"
+        } else {
+            "darwin"
+        };
+        let package = |name: &str, url: &str, bytes: &[u8], os: &str| {
+            let integrity = sri(bytes);
+            serde_json::json!({
+                "path": "opencode",
+                "name": name,
+                "version": v,
+                "url": url,
+                "integrity": integrity,
+                "signature": {"keyid": self.signer.keyid, "sig": self.signer.sign(&format!("{name}@{v}:{integrity}"))},
+                "os": [os],
+                "cpu": [self.platform.cpu],
+            })
+        };
+        let packages = vec![
+            package("opencode-here", &url, &here, self.platform.os),
+            package(
+                "opencode-elsewhere",
+                "https://registry.test/never.tgz",
+                b"never",
+                elsewhere_os,
+            ),
+        ];
+        self.fetch.serve(&url, here);
+        let lock = serde_json::json!({
+            "schema": 1,
+            "registry_keys": [{"keyid": self.signer.keyid, "key": self.signer.spki(), "expires": null}],
+            "node": {"version": NODE_VERSION, "platforms": {}},
+            "adapters": {
+                "opencode": {
+                    "version": v,
+                    "runtime": "native",
+                    "entry": "opencode/bin/opencode",
+                    "args": ["acp"],
+                    "packages": packages,
+                },
+            },
+        });
+        Lock::parse(&lock.to_string()).unwrap()
+    }
+}
+
+#[test]
+fn node_adapter_lock_serializes_without_native_fields() {
+    let lock = Lock::embedded();
+    for id in ["claude", "codex"] {
+        let json = serde_json::to_value(&lock.adapters[id]).unwrap();
+        assert!(json.get("runtime").is_none(), "{id}: {json}");
+        assert!(json.get("args").is_none(), "{id}: {json}");
+    }
+}
+
+#[tokio::test]
+async fn a_native_adapter_installs_without_node() {
+    let w = World::new();
+    let lock = w.publish_native("1.19.5");
+
+    let outcome = w.installer(&lock).ensure("opencode").await.unwrap();
+    assert!(
+        matches!(outcome, Outcome::Installed { ref version, .. } if version == "1.19.5"),
+        "{outcome:?}"
+    );
+    // The binary only: no Node runtime, no other platform's package.
+    assert_eq!(w.fetch.fetched(), 1);
+    assert_eq!(w.dirs("node"), Vec::<String>::new());
+
+    let installed = install::active(w.root(), "opencode").unwrap();
+    assert_eq!(installed.node, None);
+    assert_eq!(
+        installed.argv(),
+        (
+            w.root().join("opencode/1.19.5/opencode/bin/opencode"),
+            vec![std::ffi::OsString::from("acp")],
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_native_package_for_another_platform_is_not_fetched() {
+    let w = World::new();
+    let lock = w.publish_native("1.19.5");
+    w.installer(&lock).ensure("opencode").await.unwrap();
+    assert_eq!(w.fetch.fetched(), 1);
+    assert!(w
+        .root()
+        .join("opencode/1.19.5/opencode/bin/opencode")
+        .is_file());
+}

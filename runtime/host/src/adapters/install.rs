@@ -16,6 +16,7 @@
 //! active version stays on disk as the rollback target, and a failed install
 //! leaves the active one untouched.
 
+use std::ffi::OsString;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -23,7 +24,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::lock::{AdapterLock, Lock, Platform};
+use super::lock::{AdapterLock, Lock, Platform, Runtime};
 use super::probe::{self, ProbeInfo};
 use super::verify::{self, VerifyError};
 use crate::downloads::{Downloads, Priority, Progress};
@@ -99,9 +100,12 @@ struct Marker {
     version: String,
     /// [`Lock::digest`] of what was installed.
     digest: String,
-    /// The Node version it was probed with.
-    node: String,
+    /// The Node version it was probed with; none for a native adapter.
+    #[serde(default)]
+    node: Option<String>,
     entry: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    args: Vec<String>,
     installed_at: String,
 }
 
@@ -116,8 +120,26 @@ struct NodeMarker {
 pub struct Installed {
     pub version: String,
     pub digest: String,
-    pub node: PathBuf,
+    /// The Node that runs `entry`; `None` when `entry` is the executable.
+    pub node: Option<PathBuf>,
     pub entry: PathBuf,
+    pub args: Vec<String>,
+}
+
+impl Installed {
+    /// The program to start and its arguments.
+    pub fn argv(&self) -> (PathBuf, Vec<OsString>) {
+        let args = self.args.iter().map(OsString::from);
+        match &self.node {
+            Some(node) => (
+                node.clone(),
+                std::iter::once(self.entry.clone().into_os_string())
+                    .chain(args)
+                    .collect(),
+            ),
+            None => (self.entry.clone(), args.collect()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,13 +178,14 @@ pub fn installed(root: &Path, adapter: &str, version: &str) -> Option<Installed>
     if marker.adapter != adapter || marker.version != version || !safe_relative(&marker.entry) {
         return None;
     }
-    let node = node_bin(root, &marker.node);
+    let node = marker.node.as_deref().map(|v| node_bin(root, v));
     let entry = dir.join(&marker.entry);
-    (node.is_file() && entry.is_file()).then_some(Installed {
+    (node.as_ref().is_none_or(|n| n.is_file()) && entry.is_file()).then_some(Installed {
         version: marker.version,
         digest: marker.digest,
         node,
         entry,
+        args: marker.args,
     })
 }
 
@@ -217,9 +240,12 @@ impl Installer<'_> {
             Some((downloads, label)) => downloads.queue(label, usize::MAX, Priority::Adapter).await,
             None => Progress::none(),
         };
-        let node_version = self.ensure_node(&progress).await?;
+        let node_version = match tree.runtime {
+            Runtime::Node => Some(self.ensure_node(&progress).await?),
+            Runtime::Native => None,
+        };
         let version_dir = self
-            .install_tree(adapter, tree, &digest, &node_version, &progress)
+            .install_tree(adapter, tree, &digest, node_version.as_deref(), &progress)
             .await?;
         drop(progress);
         let Some(fresh) = installed(self.root, adapter, &tree.version) else {
@@ -278,7 +304,8 @@ impl Installer<'_> {
     }
 
     async fn probe(&self, installed: &Installed) -> Result<ProbeInfo, SetupError> {
-        probe::initialize(&installed.node, &installed.entry, self.probe_timeout)
+        let (program, args) = installed.argv();
+        probe::initialize(&program, &args, self.probe_timeout)
             .await
             .map_err(SetupError::Unhealthy)
     }
@@ -335,7 +362,7 @@ impl Installer<'_> {
         adapter: &str,
         tree: &AdapterLock,
         digest: &str,
-        node_version: &str,
+        node_version: Option<&str>,
         progress: &Progress,
     ) -> Result<PathBuf, SetupError> {
         if !safe_relative(&tree.entry) {
@@ -373,8 +400,9 @@ impl Installer<'_> {
                     adapter: adapter.to_string(),
                     version: tree.version.clone(),
                     digest: digest.to_string(),
-                    node: node_version.to_string(),
+                    node: node_version.map(str::to_string),
                     entry: tree.entry.clone(),
+                    args: tree.args.clone(),
                     installed_at: chrono::Utc::now().to_rfc3339(),
                 },
             )?;
@@ -419,7 +447,7 @@ fn prune(root: &Path, lock: &Lock) {
                 .ok()
                 .and_then(|b| serde_json::from_slice::<Marker>(&b).ok())
             {
-                nodes_in_use.insert(marker.node);
+                nodes_in_use.extend(marker.node);
             }
         }
         remove_dirs_except(&root.join(adapter), &keep);

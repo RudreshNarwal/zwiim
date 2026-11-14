@@ -584,7 +584,11 @@ pub fn keep_codex_key_in_memory(env: &mut BTreeMap<String, String>) {
         adapters::install::active(&adapters::root(), ManagedAdapter::Codex.id())
             .ok_or_else(|| "no installed Codex".to_string())
             .and_then(|installed| {
-                write_codex_launcher(&adapters::root(), &installed.node, &codex_cli(&installed))
+                let node = installed
+                    .node
+                    .as_deref()
+                    .ok_or_else(|| "the installed Codex has no Node".to_string())?;
+                write_codex_launcher(&adapters::root(), node, &codex_cli(&installed))
                     .map_err(|e| e.to_string())
             })
     };
@@ -690,7 +694,7 @@ fn vendor_command(
 ) -> Result<tokio::process::Command, AuthError> {
     let installed = adapters::install::active(&adapters::root(), adapter.id())
         .ok_or(AuthError::NotInstalled)?;
-    let mut cmd = crate::process::tokio_command(&installed.node);
+    let mut cmd = crate::process::tokio_command(node_of(&installed)?);
     match adapter {
         // The Claude adapter runs Claude Code's own CLI under `--cli`.
         ManagedAdapter::Claude => {
@@ -719,10 +723,16 @@ fn vendor_command(
 pub fn vendor_cli_line(adapter: ManagedAdapter, prompt: Option<&str>) -> Result<String, AuthError> {
     let installed = adapters::install::active(&adapters::root(), adapter.id())
         .ok_or(AuthError::NotInstalled)?;
+    let node = node_of(&installed)?;
     Ok(match adapter {
-        ManagedAdapter::Claude => cli_line(adapter, &installed.node, &installed.entry, prompt),
-        ManagedAdapter::Codex => cli_line(adapter, &installed.node, &codex_cli(&installed), prompt),
+        ManagedAdapter::Claude => cli_line(adapter, node, &installed.entry, prompt),
+        ManagedAdapter::Codex => cli_line(adapter, node, &codex_cli(&installed), prompt),
     })
+}
+
+/// The Node a vendor CLI runs on; Claude and Codex always have one.
+fn node_of(installed: &adapters::install::Installed) -> Result<&Path, AuthError> {
+    installed.node.as_deref().ok_or(AuthError::NotInstalled)
 }
 
 fn cli_line(adapter: ManagedAdapter, node: &Path, cli: &Path, prompt: Option<&str>) -> String {

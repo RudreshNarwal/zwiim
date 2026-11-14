@@ -143,9 +143,13 @@ pub fn resolve(
     dev_path: Option<&std::ffi::OsStr>,
 ) -> Option<Launch> {
     if let Some(installed) = install::active(root, adapter.id()) {
+        let (program, args) = installed.argv();
         return Some(Launch {
-            program: installed.node,
-            args: vec![installed.entry.to_string_lossy().into_owned()],
+            program,
+            args: args
+                .into_iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect(),
             source: Source::Managed,
             version: Some(installed.version),
         });
@@ -330,7 +334,8 @@ async fn setup_with(
             Some((active.version, false))
         }
         (Err(_), Some(active)) => {
-            let ok = probe::initialize(&active.node, &active.entry, PROBE_TIMEOUT)
+            let (program, args) = active.argv();
+            let ok = probe::initialize(&program, &args, PROBE_TIMEOUT)
                 .await
                 .is_ok();
             Some((active.version, ok))
