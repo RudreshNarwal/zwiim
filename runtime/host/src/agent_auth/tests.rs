@@ -641,3 +641,13 @@ fn only_api_providers_have_a_key_variable() {
     assert_eq!(opencode::provider_env("openai"), None, "oauth only");
     assert_eq!(opencode::provider_env("nope"), None);
 }
+
+#[test]
+fn only_single_variable_providers_take_a_key() {
+    // OpenCode hands a provider's key over only when it has one variable;
+    // with several (Google, Bedrock, Azure, …) the first is not the key.
+    for provider in ["google", "amazon-bedrock", "azure", "google-vertex"] {
+        assert_eq!(opencode::provider_env(provider), None, "{provider}");
+    }
+    assert_eq!(opencode::provider_env("groq"), Some("GROQ_API_KEY"));
+}

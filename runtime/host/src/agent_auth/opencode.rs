@@ -14,7 +14,9 @@ use zeroize::Zeroizing;
 const CATALOG: &str = include_str!("../../resources/opencode/models-dev.json");
 
 /// Provider id → the variable OpenCode reads its key from, for providers
-/// that take an API key.
+/// that take an API key in one variable. OpenCode itself uses a provider's
+/// variable as its key only when it is the provider's only one; with several
+/// (Google, Bedrock, Azure, …) the first is often not the key at all.
 static KEY_VARS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     #[derive(serde::Deserialize)]
     struct Provider {
@@ -25,7 +27,7 @@ static KEY_VARS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     let providers: Vec<Provider> = serde_json::from_str(CATALOG).unwrap_or_default();
     providers
         .into_iter()
-        .filter(|p| p.auth_kind.as_deref() == Some("api"))
+        .filter(|p| p.auth_kind.as_deref() == Some("api") && p.env.len() == 1)
         .filter_map(|p| Some((p.id, p.env.into_iter().next()?)))
         .collect()
 });

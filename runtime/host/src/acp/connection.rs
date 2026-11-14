@@ -1004,9 +1004,9 @@ fn apply_opencode_env_policy(agent_type: AgentType, merged: &mut Vec<(String, St
     if agent_type != AgentType::OpenCode {
         return;
     }
-    for key in ["OPENCODE_PURE", "OPENCODE_DISABLE_AUTOUPDATE"] {
+    for (key, value) in crate::adapters::ManagedAdapter::OpenCode.launch_env() {
         merged.retain(|(k, _)| k != key);
-        merged.push((key.to_string(), "1".to_string()));
+        merged.push((key.to_string(), value.to_string()));
     }
 }
 

@@ -213,6 +213,8 @@ pub struct Installer<'a> {
     pub platform: Platform,
     pub fetch: &'a dyn Fetch,
     pub probe_timeout: Duration,
+    /// Set for the probe as for every launch ([`super::ManagedAdapter::launch_env`]).
+    pub env: &'a [(&'a str, &'a str)],
     /// Where an install is listed while it downloads, and as what.
     pub downloads: Option<(&'a Arc<Downloads>, &'a str)>,
 }
@@ -305,7 +307,7 @@ impl Installer<'_> {
 
     async fn probe(&self, installed: &Installed) -> Result<ProbeInfo, SetupError> {
         let (program, args) = installed.argv();
-        probe::initialize(&program, &args, self.probe_timeout)
+        probe::initialize(&program, &args, self.env, self.probe_timeout)
             .await
             .map_err(SetupError::Unhealthy)
     }

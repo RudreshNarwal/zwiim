@@ -21,11 +21,13 @@ pub struct ProbeInfo {
 pub async fn initialize(
     program: &Path,
     args: &[OsString],
+    env: &[(&str, &str)],
     limit: Duration,
 ) -> Result<ProbeInfo, String> {
     let scratch = tempfile::tempdir().map_err(|e| format!("probe scratch dir: {e}"))?;
     let mut child = crate::process::tokio_command(program)
         .args(args)
+        .envs(env.iter().copied())
         .current_dir(scratch.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

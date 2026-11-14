@@ -835,9 +835,15 @@ pub fn vendor_cli_line(adapter: ManagedAdapter, prompt: Option<&str>) -> Result<
     let installed = adapters::install::active(&adapters::root(), adapter.id())
         .ok_or(AuthError::NotInstalled)?;
     if adapter == ManagedAdapter::OpenCode {
-        // Its own binary; external plugins stay off here too.
+        // Its own binary, with the environment every launch has.
+        let env: Vec<String> = adapter
+            .launch_env()
+            .iter()
+            .map(|(k, v)| format!("{k}={}", shell_quote(v)))
+            .collect();
         let line = format!(
-            "OPENCODE_PURE=1 OPENCODE_DISABLE_AUTOUPDATE=1 {}",
+            "{} {}",
+            env.join(" "),
             shell_quote(&installed.entry.to_string_lossy())
         );
         return Ok(match prompt {

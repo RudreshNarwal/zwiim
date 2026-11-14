@@ -28,7 +28,6 @@ const OPENCODE_PROVIDERS = [
   { id: "opencode", name: "OpenCode Zen" },
   { id: "anthropic", name: "Anthropic" },
   { id: "openrouter", name: "OpenRouter" },
-  { id: "google", name: "Google" },
   { id: "groq", name: "Groq" },
   { id: "deepseek", name: "DeepSeek" },
 ];

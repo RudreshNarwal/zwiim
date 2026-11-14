@@ -270,6 +270,7 @@ impl World {
             platform: self.platform,
             fetch: &self.fetch,
             probe_timeout: Duration::from_secs(10),
+            env: &[],
             downloads: None,
         }
     }
@@ -861,9 +862,9 @@ fn claude_counts_as_signed_in_with_a_key_credentials_file_or_keychain_item() {
 
 /// An adapter that is its own executable: it answers `initialize` only when
 /// started as `<bin> acp`.
-fn native_script(version: &str) -> String {
+fn native_script(version: &str, guard: &str) -> String {
     format!(
-        "#!/bin/sh\n[ \"$1\" = acp ] || exit 3\n{}",
+        "#!/bin/sh\n[ \"$1\" = acp ] || exit 3\n{guard}{}",
         adapter_script(version, true)
     )
 }
@@ -872,9 +873,14 @@ impl World {
     /// Publish a native `opencode` release: one binary package for this
     /// platform and one for another, both extracted to `opencode/`.
     fn publish_native(&self, v: &str) -> Lock {
+        self.publish_native_with(v, "")
+    }
+
+    /// [`World::publish_native`], whose binary first runs `guard`.
+    fn publish_native_with(&self, v: &str, guard: &str) -> Lock {
         let here = targz(&[
             ("package/package.json", 0o644, "{}"),
-            ("package/bin/opencode", 0o755, &native_script(v)),
+            ("package/bin/opencode", 0o755, &native_script(v, guard)),
         ]);
         let url = format!("https://registry.test/opencode-here-{v}.tgz");
         let elsewhere_os = if self.platform.os == "darwin" {
@@ -1039,4 +1045,19 @@ async fn a_development_opencode_on_path_starts_with_acp() {
     let dev = resolve(w.root(), ManagedAdapter::OpenCode, Some(bin.as_os_str())).unwrap();
     assert_eq!(dev.source, Source::DevPath);
     assert_eq!(dev.args, ["acp"]);
+}
+
+#[tokio::test]
+async fn a_native_adapter_is_probed_with_its_launch_env() {
+    let w = World::new();
+    // An OpenCode that only answers when started the way the Host launches
+    // it: external plugins off.
+    let lock = w.publish_native_with("1.19.5", "[ \"$OPENCODE_PURE\" = 1 ] || exit 4\n");
+    let mut installer = w.installer(&lock);
+    installer.env = ManagedAdapter::OpenCode.launch_env();
+    let outcome = installer.ensure("opencode").await;
+    assert!(
+        matches!(outcome, Ok(Outcome::Installed { .. })),
+        "{outcome:?}"
+    );
 }

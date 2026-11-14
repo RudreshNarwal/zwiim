@@ -102,6 +102,19 @@ impl ManagedAdapter {
         }
     }
 
+    /// Environment the adapter always runs with: every launch, the health
+    /// probe and its terminal. OpenCode keeps external plugins out (it would
+    /// fetch them from npm unverified and run them) and never updates itself
+    /// off the locked version.
+    pub fn launch_env(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            ManagedAdapter::OpenCode => {
+                &[("OPENCODE_PURE", "1"), ("OPENCODE_DISABLE_AUTOUPDATE", "1")]
+            }
+            _ => &[],
+        }
+    }
+
     /// What the development PATH copy starts with (the managed install's
     /// arguments come from the lock).
     fn dev_args(self) -> &'static [&'static str] {
@@ -330,6 +343,7 @@ async fn setup_with(
         platform,
         fetch,
         probe_timeout: PROBE_TIMEOUT,
+        env: adapter.launch_env(),
         downloads: Some((&crate::downloads::global(), adapter.label())),
     };
     let result = installer.ensure(adapter.id()).await;
@@ -355,7 +369,7 @@ async fn setup_with(
         }
         (Err(_), Some(active)) => {
             let (program, args) = active.argv();
-            let ok = probe::initialize(&program, &args, PROBE_TIMEOUT)
+            let ok = probe::initialize(&program, &args, adapter.launch_env(), PROBE_TIMEOUT)
                 .await
                 .is_ok();
             Some((active.version, ok))
