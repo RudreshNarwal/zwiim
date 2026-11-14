@@ -458,9 +458,10 @@ use serde::{Deserialize, Serialize};
 /// unknown), and the feed sends `download.changed {download}` as one starts
 /// or moves (at most every 250 ms each) and `download.removed
 /// {download_id}` when it ends. What the Host installs downloads one at a
-/// time, in the order asked: a download carries `waiting`, true while it is
-/// queued behind another. A file a page downloads in the browser never
-/// waits.
+/// time: an agent's adapter first, then a Zwiim update, then the browser
+/// engine, in the order asked within each. A download carries `waiting`,
+/// true while it is queued; waiting ones come last in `downloads`, in the
+/// order they will go. A file a page downloads in the browser never waits.
 ///
 /// 33 (live Zwiim tool input): a live call of one of Zwiim's own tools other
 /// than Git (`agent.tool_call`, `agent.tool_call_update`, a snapshot's

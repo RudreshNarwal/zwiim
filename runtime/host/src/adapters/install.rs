@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use super::lock::{AdapterLock, Lock, Platform};
 use super::probe::{self, ProbeInfo};
 use super::verify::{self, VerifyError};
-use crate::downloads::{Downloads, Progress};
+use crate::downloads::{Downloads, Priority, Progress};
 
 pub const STATE_FILE: &str = "state.json";
 pub const MARKER: &str = ".zwiim-install.json";
@@ -214,7 +214,7 @@ impl Installer<'_> {
         }
 
         let progress = match self.downloads {
-            Some((downloads, label)) => downloads.queue(label, usize::MAX).await,
+            Some((downloads, label)) => downloads.queue(label, usize::MAX, Priority::Adapter).await,
             None => Progress::none(),
         };
         let node_version = self.ensure_node(&progress).await?;
