@@ -100,7 +100,10 @@ impl Downloads {
         let inner = self.inner.lock().unwrap();
         let mut list = inner.list.clone();
         let place = |d: &Download| {
-            let i = inner.waiters.iter().position(|(id, _)| *id == d.download_id);
+            let i = inner
+                .waiters
+                .iter()
+                .position(|(id, _)| *id == d.download_id);
             i.map(|i| (inner.waiters[i].1, i))
         };
         // Stable: not waiting (None) first, as they were.
@@ -118,9 +121,18 @@ impl Downloads {
     /// Like [`Downloads::begin`], but waits its turn (see [`Priority`]),
     /// listed as waiting until then. Dropping the future while it waits
     /// takes it off the list.
-    pub async fn queue(self: &Arc<Self>, label: impl Into<String>, files: usize, priority: Priority) -> Progress {
+    pub async fn queue(
+        self: &Arc<Self>,
+        label: impl Into<String>,
+        files: usize,
+        priority: Priority,
+    ) -> Progress {
         let progress = self.enter(label.into(), files, Some(priority));
-        let id = progress.to.as_ref().map(|t| t.download_id.clone()).unwrap_or_default();
+        let id = progress
+            .to
+            .as_ref()
+            .map(|t| t.download_id.clone())
+            .unwrap_or_default();
         loop {
             // Listen before looking, so a turn passed in between is not missed.
             let passed = self.turn_passed.notified();
@@ -306,7 +318,9 @@ mod tests {
     #[tokio::test]
     async fn queued_downloads_go_adapters_then_updates_then_the_browser() {
         let downloads = Downloads::new();
-        let first = downloads.queue("Browser engine 156", 1, Priority::Browser).await;
+        let first = downloads
+            .queue("Browser engine 156", 1, Priority::Browser)
+            .await;
         let ask = |label: &'static str, priority| {
             let downloads = downloads.clone();
             tokio::spawn(async move { downloads.queue(label, 1, priority).await })
@@ -315,7 +329,11 @@ mod tests {
         let update = ask("Zwiim 0.6.0", Priority::Update);
         let adapter = ask("Claude Code", Priority::Adapter);
         let shown = |downloads: &Downloads| -> Vec<(String, bool)> {
-            downloads.list().into_iter().map(|d| (d.label, d.waiting)).collect()
+            downloads
+                .list()
+                .into_iter()
+                .map(|d| (d.label, d.waiting))
+                .collect()
         };
         while downloads.list().len() < 4 {
             tokio::task::yield_now().await;
@@ -358,7 +376,8 @@ mod tests {
             tokio::task::yield_now().await;
         }
         let gemini = downloads.clone();
-        let gemini = tokio::spawn(async move { gemini.queue("Gemini", 2, Priority::Adapter).await });
+        let gemini =
+            tokio::spawn(async move { gemini.queue("Gemini", 2, Priority::Adapter).await });
         while downloads.list().len() < 3 {
             tokio::task::yield_now().await;
         }
@@ -373,12 +392,20 @@ mod tests {
     async fn a_queued_download_given_up_while_waiting_is_unlisted() {
         let downloads = Downloads::new();
         let first = downloads.queue("Claude Code", 2, Priority::Adapter).await;
-        let given_up = tokio::time::timeout(Duration::from_millis(10), downloads.queue("Codex", 2, Priority::Adapter)).await;
+        let given_up = tokio::time::timeout(
+            Duration::from_millis(10),
+            downloads.queue("Codex", 2, Priority::Adapter),
+        )
+        .await;
         assert!(given_up.is_err());
         assert_eq!(downloads.list().len(), 1);
         drop(first);
         // The turn passes on: the next one does not wait.
-        let next = tokio::time::timeout(Duration::from_secs(1), downloads.queue("Codex", 2, Priority::Adapter)).await;
+        let next = tokio::time::timeout(
+            Duration::from_secs(1),
+            downloads.queue("Codex", 2, Priority::Adapter),
+        )
+        .await;
         assert!(next.is_ok());
     }
 
