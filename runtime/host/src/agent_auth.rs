@@ -37,6 +37,9 @@ fn key_var(adapter: ManagedAdapter) -> &'static str {
     match adapter {
         ManagedAdapter::Claude => "ANTHROPIC_API_KEY",
         ManagedAdapter::Codex => "CODEX_API_KEY",
+        // OpenCode Zen's own key; other providers' keys go to their own
+        // variables.
+        ManagedAdapter::OpenCode => "OPENCODE_API_KEY",
     }
 }
 
@@ -45,6 +48,7 @@ fn key_prefix(adapter: ManagedAdapter) -> &'static str {
     match adapter {
         ManagedAdapter::Claude => "sk-ant-",
         ManagedAdapter::Codex => "sk-",
+        ManagedAdapter::OpenCode => "",
     }
 }
 
@@ -101,6 +105,7 @@ pub fn status(agent: AgentType, env: &BTreeMap<String, String>) -> Option<AgentA
             &adapters::inherited_env,
             &crate::commands::acp::codex_home_dir(),
         ),
+        ManagedAdapter::OpenCode => None,
     };
     let (email, plan) = match method {
         Some(Method::Account) => account_details(adapter),
@@ -205,6 +210,7 @@ fn account_details(adapter: ManagedAdapter) -> (Option<String>, Option<String>) 
     let (email, plan) = match adapter {
         ManagedAdapter::Claude => (claude_account_email(&adapters::claude_config_dir()), None),
         ManagedAdapter::Codex => codex_account(&crate::commands::acp::codex_home_dir()),
+        ManagedAdapter::OpenCode => (None, None),
     };
     (email.or(reported.email), plan.or(reported.label))
 }
@@ -485,6 +491,7 @@ fn checked_key(adapter: ManagedAdapter, key: &str) -> Result<Zeroizing<String>, 
         return Err(AuthError::InvalidKey(match adapter {
             ManagedAdapter::Claude => "Anthropic API keys start with sk-ant-.",
             ManagedAdapter::Codex => "OpenAI API keys start with sk-.",
+            ManagedAdapter::OpenCode => "That is not an API key.",
         }));
     }
     Ok(Zeroizing::new(key.to_string()))
@@ -538,6 +545,7 @@ pub fn apply_saved_key(agent: AgentType, env: &mut BTreeMap<String, String>) {
             adapters::codex_api_key_present(env, &adapters::inherited_env)
                 || codex_login(&crate::commands::acp::codex_home_dir()) == CodexLogin::ChatGpt
         }
+        ManagedAdapter::OpenCode => false,
     };
     hand_over(adapter, &key, signed_in, env);
 }
@@ -692,6 +700,9 @@ fn vendor_command(
     adapter: ManagedAdapter,
     args: &[&str],
 ) -> Result<tokio::process::Command, AuthError> {
+    if adapter == ManagedAdapter::OpenCode {
+        return Err(AuthError::InvalidKey("OpenCode signs in with API keys."));
+    }
     let installed = adapters::install::active(&adapters::root(), adapter.id())
         .ok_or(AuthError::NotInstalled)?;
     let mut cmd = crate::process::tokio_command(node_of(&installed)?);
@@ -706,6 +717,7 @@ fn vendor_command(
         ManagedAdapter::Codex => {
             cmd.arg(codex_cli(&installed));
         }
+        ManagedAdapter::OpenCode => unreachable!("refused above"),
     }
     cmd.args(args)
         .stdin(std::process::Stdio::null())
@@ -723,10 +735,22 @@ fn vendor_command(
 pub fn vendor_cli_line(adapter: ManagedAdapter, prompt: Option<&str>) -> Result<String, AuthError> {
     let installed = adapters::install::active(&adapters::root(), adapter.id())
         .ok_or(AuthError::NotInstalled)?;
+    if adapter == ManagedAdapter::OpenCode {
+        // Its own binary; external plugins stay off here too.
+        let line = format!(
+            "OPENCODE_PURE=1 OPENCODE_DISABLE_AUTOUPDATE=1 {}",
+            shell_quote(&installed.entry.to_string_lossy())
+        );
+        return Ok(match prompt {
+            Some(prompt) => format!("{line} --prompt {}", shell_quote(prompt)),
+            None => line,
+        });
+    }
     let node = node_of(&installed)?;
     Ok(match adapter {
         ManagedAdapter::Claude => cli_line(adapter, node, &installed.entry, prompt),
         ManagedAdapter::Codex => cli_line(adapter, node, &codex_cli(&installed), prompt),
+        ManagedAdapter::OpenCode => unreachable!("handled above"),
     })
 }
 
@@ -743,6 +767,7 @@ fn cli_line(adapter: ManagedAdapter, node: &Path, cli: &Path, prompt: Option<&st
     let line = match adapter {
         ManagedAdapter::Claude => format!("DISABLE_AUTOUPDATER=1 {node} {cli} --cli"),
         ManagedAdapter::Codex => format!("{node} {cli} -c check_for_update_on_startup=false"),
+        ManagedAdapter::OpenCode => unreachable!("OpenCode runs without Node"),
     };
     match prompt {
         Some(prompt) => format!("{line} {}", shell_quote(prompt)),
@@ -754,6 +779,7 @@ fn sign_in_args(adapter: ManagedAdapter) -> &'static [&'static str] {
     match adapter {
         ManagedAdapter::Claude => &["auth", "login", "--claudeai"],
         ManagedAdapter::Codex => &["login"],
+        ManagedAdapter::OpenCode => &[],
     }
 }
 
@@ -761,6 +787,7 @@ fn sign_out_args(adapter: ManagedAdapter) -> &'static [&'static str] {
     match adapter {
         ManagedAdapter::Claude => &["auth", "logout"],
         ManagedAdapter::Codex => &["logout"],
+        ManagedAdapter::OpenCode => &[],
     }
 }
 
@@ -860,6 +887,11 @@ async fn vendor_sign_out(adapter: ManagedAdapter) -> Result<(), AuthError> {
     if matches!(adapter, ManagedAdapter::Claude) && !claude_account_saved() {
         return Ok(());
     }
+    // OpenCode's own logins (`opencode auth login`) are the user's: Zwiim
+    // only removes the keys it saved.
+    if adapter == ManagedAdapter::OpenCode {
+        return Ok(());
+    }
     let result = match vendor_command(adapter, sign_out_args(adapter)) {
         Ok(mut cmd) => match cmd.spawn() {
             Ok(child) => {
@@ -887,6 +919,7 @@ async fn vendor_sign_out(adapter: ManagedAdapter) -> Result<(), AuthError> {
         // Claude Code's login lives in its own Keychain item: only its CLI
         // clears that.
         ManagedAdapter::Claude => result,
+        ManagedAdapter::OpenCode => unreachable!("returned above"),
     }
 }
 

@@ -5021,11 +5021,11 @@ async fn agent_list_reports_availability_only() {
 }
 
 #[tokio::test]
-async fn agent_list_marks_claude_and_codex_supported_and_host_managed() {
+async fn agent_list_marks_managed_agents_supported() {
     let h = host(false).await;
     let list = h.ok("agent.list", json!({})).await;
     for a in list.as_array().unwrap() {
-        let managed = a["agent"] == "claude_code" || a["agent"] == "codex";
+        let managed = ["claude_code", "codex", "open_code"].contains(&a["agent"].as_str().unwrap());
         if managed {
             assert_eq!(a["support"], "supported", "{a}");
             let adapter = &a["adapter"];
@@ -5086,7 +5086,10 @@ async fn agent_sign_in_status_reaches_every_client_and_never_a_key() {
             .iter()
             .map(|s| s["agent"].clone())
             .collect();
-        assert_eq!(agents, [json!("claude_code"), json!("codex")]);
+        assert_eq!(
+            agents,
+            [json!("claude_code"), json!("codex"), json!("open_code")]
+        );
         assert!(!all.to_string().contains(key), "{all}");
         let mut fields: Vec<_> = all[1].as_object().unwrap().keys().cloned().collect();
         fields.sort();
@@ -5861,7 +5864,7 @@ async fn diagnostics_report_versions_and_state_without_secrets() {
     assert_eq!(d["update"]["supported"], false, "{d}");
     assert_eq!(d["update"]["unsupported_reason"], "unsigned_build");
     assert_eq!(d["database"]["schema"]["state"], "current", "{d}");
-    for adapter in ["claude", "codex"] {
+    for adapter in ["claude", "codex", "opencode"] {
         let a = &d["adapters"][adapter];
         assert!(a["locked_version"].is_string(), "{d}");
         assert!(a["authenticated"].is_boolean(), "{d}");

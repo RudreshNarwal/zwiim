@@ -740,7 +740,9 @@ fn the_committed_lock_matches_the_registry_pins() {
             adapter.id()
         );
         let tree = &lock.adapters[adapter.id()];
-        assert!(tree.entry.starts_with("node_modules/"), "{}", tree.entry);
+        if tree.runtime == super::lock::Runtime::Node {
+            assert!(tree.entry.starts_with("node_modules/"), "{}", tree.entry);
+        }
     }
     let apple_silicon = Platform {
         os: "darwin",
@@ -748,6 +750,7 @@ fn the_committed_lock_matches_the_registry_pins() {
     };
     assert!(lock.digest("claude", apple_silicon).is_some());
     assert!(lock.digest("codex", apple_silicon).is_some());
+    assert!(lock.digest("opencode", apple_silicon).is_some());
 }
 
 #[test]
@@ -987,4 +990,53 @@ fn embedded_lock_has_one_opencode_package_per_platform() {
             .count();
         assert_eq!(applies, 1, "{os}-{cpu}");
     }
+}
+
+#[test]
+fn managed_adapters_are_claude_codex_opencode() {
+    let ids: Vec<&str> = ManagedAdapter::ALL.iter().map(|a| a.id()).collect();
+    assert_eq!(ids, ["claude", "codex", "opencode"]);
+    assert_eq!(
+        ManagedAdapter::for_agent(AgentType::OpenCode),
+        Some(ManagedAdapter::OpenCode)
+    );
+    assert_eq!(ManagedAdapter::OpenCode.agent(), AgentType::OpenCode);
+    assert_eq!(ManagedAdapter::OpenCode.label(), "OpenCode");
+}
+
+#[tokio::test]
+async fn managed_opencode_launches_its_binary_with_acp_once() {
+    let w = World::new();
+    let lock = w.publish_native("1.19.5");
+    w.installer(&lock).ensure("opencode").await.unwrap();
+    let launch = resolve(w.root(), ManagedAdapter::OpenCode, None).unwrap();
+    assert_eq!(launch.source, Source::Managed);
+    assert_eq!(launch.version.as_deref(), Some("1.19.5"));
+    assert_eq!(
+        launch.argv(),
+        [
+            w.root()
+                .join("opencode/1.19.5/opencode/bin/opencode")
+                .to_string_lossy()
+                .into_owned(),
+            "acp".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_development_opencode_on_path_starts_with_acp() {
+    let w = World::new();
+    let bin = w.root().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let opencode = bin.join("opencode");
+    std::fs::write(&opencode, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(
+        &opencode,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let dev = resolve(w.root(), ManagedAdapter::OpenCode, Some(bin.as_os_str())).unwrap();
+    assert_eq!(dev.source, Source::DevPath);
+    assert_eq!(dev.args, ["acp"]);
 }

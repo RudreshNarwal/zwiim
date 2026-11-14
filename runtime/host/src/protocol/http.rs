@@ -770,7 +770,8 @@ async fn auth_status_of(
     crate::agent_auth::status(agent, &env).expect("a managed agent has a sign-in status")
 }
 
-/// `agent.auth_status`: how Claude Code and Codex are signed in on this host.
+/// `agent.auth_status`: how Claude Code, Codex and OpenCode are signed in on
+/// this host.
 /// Read fresh on every call.
 pub async fn agent_auth_status(
     Extension(state): Extension<Arc<AppState>>,
@@ -2067,13 +2068,13 @@ pub async fn terminal_spawn(
         Some(agent) => {
             use crate::adapters::ManagedAdapter;
             let adapter = ManagedAdapter::for_agent(agent).ok_or_else(|| {
-                ZwiimError::invalid_request("only Claude Code and Codex run in a terminal")
+                ZwiimError::invalid_request("only Claude Code, Codex and OpenCode run in a terminal")
             })?;
             // Claude Code runs a slash command given as its first prompt;
             // Codex would send it to the model, so it is pasted in instead.
             let (prompt, paste) = match adapter {
                 ManagedAdapter::Claude => (p.command, None),
-                ManagedAdapter::Codex => (None, p.command),
+                ManagedAdapter::Codex | ManagedAdapter::OpenCode => (None, p.command),
             };
             let line = crate::agent_auth::vendor_cli_line(adapter, prompt.as_deref())
                 .map_err(auth_error)?;

@@ -12400,7 +12400,18 @@ pub(crate) async fn acp_download_agent_binary_core(
     emit_agent_install_event(emitter, &task_id, AgentInstallEventKind::Started, "");
 
     let meta = registry::get_agent_meta(agent_type);
+    let managed = crate::adapters::ManagedAdapter::for_agent(agent_type);
     let result = match meta.distribution {
+        // OpenCode installs from the committed lock, never from the release
+        // URLs in the registry.
+        _ if managed.is_some() => prepare_managed_adapter(
+            managed.expect("guarded"),
+            version_override.as_deref(),
+            &task_id,
+            emitter,
+        )
+        .await
+        .map(|_| ()),
         registry::AgentDistribution::Binary {
             version,
             cmd,
@@ -12661,8 +12672,8 @@ pub async fn acp_detect_agent_local_version(
     acp_detect_agent_local_version_core(agent_type, &db.conn, &emitter).await
 }
 
-/// Claude and Codex install from the committed lock into the Host's data
-/// directory (see `crate::adapters`), never with `npm -g`, and always at the
+/// Claude, Codex and OpenCode install from the committed lock into the
+/// Host's data directory (see `crate::adapters`), never with `npm -g`, and always at the
 /// version this build pins.
 async fn prepare_managed_adapter(
     adapter: crate::adapters::ManagedAdapter,
@@ -12702,7 +12713,7 @@ pub(crate) async fn acp_prepare_npx_agent_core(
     let meta = registry::get_agent_meta(agent_type);
     let managed = crate::adapters::ManagedAdapter::for_agent(agent_type);
     let result = match meta.distribution {
-        registry::AgentDistribution::Npx { .. } if managed.is_some() => {
+        _ if managed.is_some() => {
             prepare_managed_adapter(
                 managed.expect("guarded"),
                 version_override.as_deref(),

@@ -1,5 +1,5 @@
-//! Managed agent adapters: the exact Claude and Codex adapters this Host
-//! runs, installed from the committed lock into `<data dir>/adapters`.
+//! Managed agent adapters: the exact Claude, Codex and OpenCode adapters this
+//! Host runs, installed from the committed lock into `<data dir>/adapters`.
 //!
 //! - **From the lock only.** Every package is checked against its locked
 //!   sha512 and npm registry signature, and Node against its locked SHA-256,
@@ -47,16 +47,23 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 pub enum ManagedAdapter {
     Claude,
     Codex,
+    /// OpenCode speaks ACP itself: the adapter is its own native binary.
+    OpenCode,
 }
 
 impl ManagedAdapter {
-    pub const ALL: [ManagedAdapter; 2] = [ManagedAdapter::Claude, ManagedAdapter::Codex];
+    pub const ALL: [ManagedAdapter; 3] = [
+        ManagedAdapter::Claude,
+        ManagedAdapter::Codex,
+        ManagedAdapter::OpenCode,
+    ];
 
     /// Its key in the lock and its directory under the adapters root.
     pub fn id(self) -> &'static str {
         match self {
             ManagedAdapter::Claude => "claude",
             ManagedAdapter::Codex => "codex",
+            ManagedAdapter::OpenCode => "opencode",
         }
     }
 
@@ -64,6 +71,7 @@ impl ManagedAdapter {
         match agent {
             AgentType::ClaudeCode => Some(ManagedAdapter::Claude),
             AgentType::Codex => Some(ManagedAdapter::Codex),
+            AgentType::OpenCode => Some(ManagedAdapter::OpenCode),
             _ => None,
         }
     }
@@ -72,6 +80,7 @@ impl ManagedAdapter {
         match self {
             ManagedAdapter::Claude => AgentType::ClaudeCode,
             ManagedAdapter::Codex => AgentType::Codex,
+            ManagedAdapter::OpenCode => AgentType::OpenCode,
         }
     }
 
@@ -80,6 +89,7 @@ impl ManagedAdapter {
         match self {
             ManagedAdapter::Claude => "Claude Code",
             ManagedAdapter::Codex => "Codex",
+            ManagedAdapter::OpenCode => "OpenCode",
         }
     }
 
@@ -88,6 +98,16 @@ impl ManagedAdapter {
         match self {
             ManagedAdapter::Claude => "claude-agent-acp",
             ManagedAdapter::Codex => "codex-acp",
+            ManagedAdapter::OpenCode => "opencode",
+        }
+    }
+
+    /// What the development PATH copy starts with (the managed install's
+    /// arguments come from the lock).
+    fn dev_args(self) -> &'static [&'static str] {
+        match self {
+            ManagedAdapter::OpenCode => &["acp"],
+            _ => &[],
         }
     }
 
@@ -159,7 +179,7 @@ pub fn resolve(
     let program = which::which_in(adapter.command(), Some(path), cwd).ok()?;
     Some(Launch {
         program,
-        args: Vec::new(),
+        args: adapter.dev_args().iter().map(|a| a.to_string()).collect(),
         source: Source::DevPath,
         version: None,
     })
@@ -432,6 +452,8 @@ fn authenticated(adapter: ManagedAdapter, env: &BTreeMap<String, String>) -> boo
         ManagedAdapter::Codex => {
             codex_signed_in(env, &inherited_env, &crate::commands::acp::codex_home_dir())
         }
+        // OpenCode Zen's free models need no credentials.
+        ManagedAdapter::OpenCode => true,
     }
 }
 
