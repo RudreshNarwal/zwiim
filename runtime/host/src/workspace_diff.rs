@@ -1,14 +1,17 @@
 //! Zwiim-owned read-only workspace diff (`git.diff`).
 //!
 //! One combined view of everything that differs from the workspace's base:
-//! - a worktree is compared against `merge-base(base_commit, HEAD)`, so its
-//!   committed, staged and unstaged changes all show;
+//! - a worktree is compared against where it forked from its base branch, so
+//!   its committed, staged and unstaged changes all show, and leaves out what
+//!   the base branch already has: once its pull request lands, the diff is
+//!   empty;
 //! - a root workspace (or a worktree with no recorded base) is compared
 //!   against its own `HEAD`: its uncommitted changes.
 //!
 //! Untracked files show as added; ignored files never show. Binary and
 //! oversized files are listed without content. Symlinks are never followed.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use serde::Serialize;
@@ -93,10 +96,38 @@ async fn stdout_ok(dir: &str, what: &str, args: &[&str]) -> Result<Vec<u8>, AppC
     Ok(out.stdout)
 }
 
-/// The commit (or empty tree) workspace `row` is compared against.
-async fn base_of(row: &folder::Model) -> Result<Option<String>, AppCommandError> {
+/// `rev` as a commit id, when it names one.
+async fn commit_of(dir: &str, rev: &str) -> Option<String> {
+    if rev.starts_with('-') {
+        return None;
+    }
+    let spec = format!("{rev}^{{commit}}");
+    let out = run(dir, &["rev-parse", "--verify", "--quiet", &spec])
+        .await
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// The tip of worktree `row`'s base branch, when it has one locally.
+async fn base_tip(row: &folder::Model) -> Option<String> {
+    row.parent_id?;
+    commit_of(&row.path, row.base_branch.as_deref()?).await
+}
+
+/// The commit (or empty tree) workspace `row` is compared against: for a
+/// worktree, the newest commit `HEAD` shares with its recorded base or its
+/// base branch, so a branch cut or updated from a newer base compares
+/// against that.
+async fn base_of(
+    row: &folder::Model,
+    tip: Option<&str>,
+) -> Result<Option<String>, AppCommandError> {
     if let (Some(_), Some(base)) = (row.parent_id, row.base_commit.as_deref()) {
-        let out = stdout_ok(&row.path, "merge-base", &["merge-base", base, "HEAD"]).await?;
+        let mut args = vec!["merge-base", "HEAD", base];
+        args.extend(tip);
+        let out = stdout_ok(&row.path, "merge-base", &args).await?;
         return Ok(Some(String::from_utf8_lossy(&out).trim().to_string()));
     }
     let head = run(&row.path, &["rev-parse", "--verify", "HEAD^{commit}"]).await?;
@@ -165,6 +196,31 @@ async fn tracked(dir: &str, base: &str) -> Result<Vec<DiffFile>, AppCommandError
         });
     }
     Ok(files)
+}
+
+/// Whether commit `tip` has commit `base` in its history.
+async fn contains(dir: &str, tip: &str, base: &str) -> bool {
+    run(dir, &["merge-base", "--is-ancestor", base, tip])
+        .await
+        .is_ok_and(|out| out.status.success())
+}
+
+/// Paths whose content differs from commit `tip`.
+async fn differ_from(dir: &str, tip: &str) -> Result<HashSet<String>, AppCommandError> {
+    let out = stdout_ok(
+        dir,
+        "diff",
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            tip,
+        ],
+    )
+    .await?;
+    Ok(fields(&out).collect())
 }
 
 /// Describe untracked file `rel` without following symlinks.
@@ -281,10 +337,18 @@ pub async fn diff(
     file: Option<&str>,
 ) -> Result<WorkspaceDiff, AppCommandError> {
     crate::git_repo::ensure_git_repo(&row.path)?;
-    let base_commit = base_of(row).await?;
+    let tip = base_tip(row).await;
+    let base_commit = base_of(row, tip.as_deref()).await?;
     let base = base_commit.as_deref().unwrap_or(EMPTY_TREE);
 
     let mut files = tracked(&row.path, base).await?;
+    if let Some(tip) = tip.as_deref() {
+        // A base branch behind the base (not fetched yet) says nothing new.
+        if contains(&row.path, tip, base).await {
+            let differ = differ_from(&row.path, tip).await?;
+            files.retain(|f| differ.contains(&f.path));
+        }
+    }
     files.extend(untracked(&row.path).await?);
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
@@ -483,6 +547,54 @@ mod tests {
                 "{path}"
             );
         }
+    }
+
+    fn paths(d: &WorkspaceDiff) -> Vec<&str> {
+        d.files.iter().map(|f| f.path.as_str()).collect()
+    }
+
+    /// Once the base branch has the worktree's changes (a squash merge of
+    /// its pull request), nothing is left to show but later edits.
+    #[tokio::test]
+    async fn a_landed_branch_shows_only_what_came_after() {
+        let (_dir, root, wt) = repo_and_worktree().await;
+        assert!(wt.base_branch.is_some());
+        let (r, w) = (Path::new(&root.path), Path::new(&wt.path));
+        for dir in [w, r] {
+            std::fs::write(dir.join("feature.txt"), "f\n").unwrap();
+            std::fs::write(dir.join("edit.txt"), "a\nB\n").unwrap();
+            git(dir, &["add", "-A"]);
+            git(dir, &["commit", "-q", "-m", "feature"]);
+        }
+        std::fs::write(r.join("other.txt"), "o\n").unwrap();
+        git(r, &["add", "."]);
+        git(r, &["commit", "-q", "-m", "someone else"]);
+        assert!(diff(&wt, None).await.unwrap().files.is_empty());
+        let err = diff(&wt, Some("feature.txt")).await.unwrap_err();
+        assert!(matches!(err.code, crate::app_error::AppErrorCode::NotFound));
+
+        std::fs::write(w.join("feature.txt"), "f2\n").unwrap();
+        assert_eq!(paths(&diff(&wt, None).await.unwrap()), ["feature.txt"]);
+    }
+
+    /// A branch started from a newer base compares against that base, not
+    /// the one the worktree was made from.
+    #[tokio::test]
+    async fn a_branch_cut_from_a_newer_base_compares_against_it() {
+        let (_dir, root, wt) = repo_and_worktree().await;
+        let (r, w) = (Path::new(&root.path), Path::new(&wt.path));
+        std::fs::write(r.join("later.txt"), "l\n").unwrap();
+        git(r, &["add", "."]);
+        git(r, &["commit", "-q", "-m", "later"]);
+        let tip = git(r, &["rev-parse", "HEAD"]);
+        git(w, &["checkout", "-q", "-b", "next", &tip]);
+        std::fs::write(w.join("new.txt"), "n\n").unwrap();
+        git(w, &["add", "."]);
+        git(w, &["commit", "-q", "-m", "new"]);
+
+        let d = diff(&wt, None).await.unwrap();
+        assert_eq!(d.base_commit.as_deref(), Some(tip.as_str()));
+        assert_eq!(paths(&d), ["new.txt"]);
     }
 
     #[tokio::test]

@@ -48,7 +48,7 @@ use crate::downloads::{Download, Downloads};
 use crate::conflict_watch::{
     self, ConflictCmd, ConflictResult, ConflictTarget, ConflictWatchConfig,
 };
-use crate::git_harness::{ConflictCheck, GitError, GitErrorCode};
+use crate::git_harness::{ConflictCheck, GitError, GitErrorCode, PrLifecycle};
 use crate::power::KeepAwakeStatus;
 use crate::pr_watch::{self, PrCmd, PrEntry, PrResult, PrTarget, PrWatchConfig};
 use crate::protocol::http::SessionSummary;
@@ -515,6 +515,12 @@ fn resolving_changed(workspace_id: &str, session_id: Option<&str>) -> (&'static 
     )
 }
 
+fn is_merged(entry: Option<&PrEntry>) -> bool {
+    entry
+        .and_then(|e| e.pr.as_ref())
+        .is_some_and(|pr| pr.state == PrLifecycle::Merged)
+}
+
 fn pr_changed(workspace_id: &str, entry: &PrEntry) -> (&'static str, Value) {
     (
         "workspace.pr_changed",
@@ -956,6 +962,12 @@ impl FeedTask {
         let known = self.projection.prs.get(&result.workspace_id);
         if known.cloned().unwrap_or_default() == result.entry {
             return;
+        }
+        // Its base branch now has the merge: fetch it so the diff empties.
+        if is_merged(Some(&result.entry)) && !is_merged(known) {
+            let _ = self
+                .conflict_cmd
+                .send(ConflictCmd::Fetch(result.workspace_id.clone()));
         }
         if result.entry.is_empty() {
             self.projection.prs.remove(&result.workspace_id);
@@ -2528,6 +2540,19 @@ esac
             .await;
         tokio::time::sleep(Duration::from_millis(500)).await;
         feed.drain(300).await;
+        // Seeing the merge fetches the base, so the worktree's diff empties.
+        let rev = |dir: &Path, name: &str| {
+            let out = std::process::Command::new("git")
+                .args(["rev-parse", name])
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        assert_eq!(rev(repo, "origin/main"), rev(&other, "HEAD"));
+        let row = workspace::resolve(&f.state.db.conn, &wt.workspace_id).await.unwrap();
+        let diff = crate::workspace_diff::diff(&row, None).await.unwrap();
+        assert!(diff.files.is_empty(), "{:?}", diff.files);
 
         let host = crate::git_harness::GitHost {
             db: &f.state.db.conn,
