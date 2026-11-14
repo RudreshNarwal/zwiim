@@ -807,8 +807,15 @@ mod tests {
     async fn the_migration_backfills_ids_and_keeps_adopted_rows_in_id_order() {
         let db = fresh_in_memory_db().await;
         let backend = db.conn.get_database_backend();
-        // Back past `workspace_group_ids` and the migrations after it.
-        Migrator::down(&db.conn, Some(5)).await.unwrap();
+        // Back past `workspace_group_ids` and the migrations after it, however
+        // many later ones there are.
+        let steps = Migrator::migrations()
+            .iter()
+            .rev()
+            .position(|m| m.name() == "m20261104_000001_workspace_group_ids")
+            .expect("the migration is listed")
+            + 1;
+        Migrator::down(&db.conn, Some(steps as u32)).await.unwrap();
         let now = Utc::now();
         for (order, path) in [(3, "/oldest"), (2, "/middle"), (1, "/newest")] {
             folder::ActiveModel {
