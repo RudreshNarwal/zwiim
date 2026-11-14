@@ -1783,6 +1783,11 @@ export interface HostDownload {
   received: number;
   /** Bytes in all; null when unknown (an install of many files). */
   total: number | null;
+  /**
+   * Queued behind another download: the Host downloads what it installs one
+   * at a time. Absent from an older Host, which downloads them all at once.
+   */
+  waiting?: boolean;
 }
 
 /** The feed's baseline: what `workspace.list`, `session.list` and `terminal.list` return. */

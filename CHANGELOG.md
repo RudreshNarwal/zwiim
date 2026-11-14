@@ -54,7 +54,9 @@ have their own versions and are listed under Compatibility.
   paired device watches; your own tabs stay on the Mac.
 - Downloads show their progress above the composer: "Downloading Claude
   Code… 23 MB", "Downloading Browser engine… 6 MB / 105 MB", and Zwiim
-  updates (which bring the GitHub CLI).
+  updates (which bring the GitHub CLI). They download one at a time,
+  agents first, then Zwiim updates, then the browser engine, so one strip
+  shows the download under way and how many wait behind it.
 
 ### Changed
 - None.

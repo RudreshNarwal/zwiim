@@ -175,7 +175,7 @@ impl Installer<'_> {
     async fn install_into(&self, staging: &Path) -> Result<(), SetupError> {
         let archive = staging.join("engine.zip");
         let progress = match self.downloads {
-            Some(downloads) => downloads.begin(format!("Browser engine {}", self.pin.version), 1),
+            Some(downloads) => downloads.queue(format!("Browser engine {}", self.pin.version), 1, crate::downloads::Priority::Browser).await,
             None => crate::downloads::Progress::none(),
         };
         self.fetch.fetch(&self.pin.url(), &archive, &progress).await?;

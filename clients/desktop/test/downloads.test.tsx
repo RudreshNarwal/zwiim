@@ -37,4 +37,39 @@ describe("host downloads", () => {
     await t.feedEvent("download.removed", { download_id: "d2" });
     expect(screen.queryByRole("status")).toBeNull();
   });
+
+  it("shows the download under way, and how many wait behind it", async () => {
+    const t = new FakeTransport();
+    const client = new HostClient({ transport: t });
+    const controller = new HostController(client);
+    client.start();
+    await tick();
+    render(
+      <HostProvider value={controller}>
+        <HostDownloads />
+      </HostProvider>,
+    );
+    const rows = () => [...screen.getByRole("status", { name: "Downloads" }).children].map((r) => r.textContent);
+
+    await t.feedEvent("download.changed", {
+      download: { download_id: "d1", label: "Claude Code", received: 23_000_000, total: null, waiting: false },
+    });
+    await t.feedEvent("download.changed", {
+      download: { download_id: "d2", label: "Browser engine 157", received: 0, total: null, waiting: true },
+    });
+    await t.feedEvent("download.changed", {
+      download: { download_id: "d3", label: "Zwiim 0.7.0", received: 0, total: null, waiting: true },
+    });
+    expect(rows()).toEqual(["Downloading Claude Code…23 MB· 2 waiting"]);
+    expect(screen.getByTitle("Next: Browser engine 157, Zwiim 0.7.0")).toBeTruthy();
+
+    // Its turn has not quite come: it reads as waiting, not downloading.
+    await t.feedEvent("download.removed", { download_id: "d1" });
+    expect(rows()).toEqual(["Waiting to download Browser engine 157…· 1 waiting"]);
+
+    await t.feedEvent("download.changed", {
+      download: { download_id: "d2", label: "Browser engine 157", received: 1_000_000, total: 105_000_000, waiting: false },
+    });
+    expect(rows()).toEqual(["Downloading Browser engine 157…1.0 MB / 105 MB· 1 waiting"]);
+  });
 });

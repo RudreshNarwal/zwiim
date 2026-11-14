@@ -2754,7 +2754,7 @@ esac
         assert_eq!(
             changed.last().unwrap(),
             &json!({"download_id": "download-2", "label": "Browser engine 157",
-                    "received": 0, "total": 1000})
+                    "received": 0, "total": 1000, "waiting": false})
         );
 
         drop(early);
