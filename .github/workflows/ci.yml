@@ -18,6 +18,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pinned so the Rust build cache keeps matching: each new stable release
+  # changes its key and the next run compiles everything from scratch.
+  # Raise it on purpose, in its own change.
+  RUST_TOOLCHAIN: "1.100.0"
 
 jobs:
   release-metadata:
@@ -40,8 +44,14 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      # Saved from master only: pull requests restore it, and their own
+      # copies (over 1 GB each) would push it out of the 10 GB cache.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -68,10 +78,15 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
+      # Saved from master only: pull requests restore it, and their own
+      # copies (over 1 GB each) would push it out of the 10 GB cache.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -149,8 +164,14 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      # Saved from master only: pull requests restore it, and their own
+      # copies (over 1 GB each) would push it out of the 10 GB cache.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - uses: actions/setup-node@v7
         with:
           node-version: 22
