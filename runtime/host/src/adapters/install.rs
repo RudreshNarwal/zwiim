@@ -214,7 +214,7 @@ impl Installer<'_> {
         }
 
         let progress = match self.downloads {
-            Some((downloads, label)) => downloads.begin(label, usize::MAX),
+            Some((downloads, label)) => downloads.queue(label, usize::MAX).await,
             None => Progress::none(),
         };
         let node_version = self.ensure_node(&progress).await?;

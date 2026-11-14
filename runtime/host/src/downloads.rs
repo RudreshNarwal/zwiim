@@ -6,12 +6,17 @@
 //!
 //! One entry per thing the person would name, not per file: an adapter's
 //! hundred packages are one "Claude Code".
+//!
+//! What the Host installs downloads one at a time, in the order asked
+//! ([`Downloads::queue`]); the rest are listed as waiting. A file a page
+//! downloads in the browser starts at once ([`Downloads::begin`]): the
+//! browser starts it, not the Host.
 
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tokio::sync::watch;
+use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
 
 /// Progress is announced at most this often per download.
 const NOTIFY_EVERY: Duration = Duration::from_millis(250);
@@ -26,6 +31,8 @@ pub struct Download {
     pub received: u64,
     /// Bytes in all, when known.
     pub total: Option<u64>,
+    /// Queued behind another download; nothing arrives until it ends.
+    pub waiting: bool,
 }
 
 #[derive(Default)]
@@ -38,6 +45,8 @@ pub struct Downloads {
     inner: Mutex<Inner>,
     /// Bumped on every announced change; the host feed watches it.
     notify: watch::Sender<u64>,
+    /// One permit: the queued download whose turn it is holds it.
+    turn: Arc<Semaphore>,
 }
 
 /// The Host's downloads.
@@ -51,6 +60,7 @@ impl Downloads {
         Arc::new(Self {
             inner: Mutex::default(),
             notify: watch::Sender::new(0),
+            turn: Arc::new(Semaphore::new(1)),
         })
     }
 
@@ -67,15 +77,34 @@ impl Downloads {
     /// the returned [`Progress`] is dropped. Its total is known only for a
     /// single file.
     pub fn begin(self: &Arc<Self>, label: impl Into<String>, files: usize) -> Progress {
+        self.enter(label.into(), files, false)
+    }
+
+    /// Like [`Downloads::begin`], but waits its turn: listed as waiting
+    /// until every download queued before it has ended. Dropping the future
+    /// while it waits takes it off the list.
+    pub async fn queue(self: &Arc<Self>, label: impl Into<String>, files: usize) -> Progress {
+        let mut progress = self.enter(label.into(), files, true);
+        let permit = self.turn.clone().acquire_owned().await.expect("the turn is never closed");
+        if let Some(t) = &mut progress.to {
+            self.update(&t.download_id, |d| d.waiting = false);
+            t.turn = Some(permit);
+        }
+        self.changed();
+        progress
+    }
+
+    fn enter(self: &Arc<Self>, label: String, files: usize, waiting: bool) -> Progress {
         let download_id = {
             let mut inner = self.inner.lock().unwrap();
             inner.next += 1;
             let download_id = format!("download-{}", inner.next);
             inner.list.push(Download {
                 download_id: download_id.clone(),
-                label: label.into(),
+                label,
                 received: 0,
                 total: None,
+                waiting,
             });
             download_id
         };
@@ -86,6 +115,7 @@ impl Downloads {
                 download_id,
                 single: files == 1,
                 last: Mutex::new(Instant::now()),
+                turn: None,
             }),
         }
     }
@@ -112,6 +142,8 @@ struct Tracked {
     download_id: String,
     single: bool,
     last: Mutex<Instant>,
+    /// A queued download's turn, given back when it ends.
+    turn: Option<OwnedSemaphorePermit>,
 }
 
 impl Progress {
@@ -175,6 +207,7 @@ mod tests {
                 label: "Browser engine 157".into(),
                 received: 40,
                 total: Some(100),
+                waiting: false,
             }]
         );
         drop(one);
@@ -207,6 +240,63 @@ mod tests {
         *one.to.as_ref().unwrap().last.lock().unwrap() -= NOTIFY_EVERY;
         one.received(1);
         assert!(rx.has_changed().unwrap());
+    }
+
+    #[tokio::test]
+    async fn queued_downloads_take_turns_in_order() {
+        let downloads = Downloads::new();
+        let first = downloads.queue("Claude Code", 2).await;
+        let second = tokio::spawn({
+            let downloads = downloads.clone();
+            async move { downloads.queue("Browser engine 157", 1).await }
+        });
+        let third = tokio::spawn({
+            let downloads = downloads.clone();
+            async move { downloads.queue("Zwiim 0.6.0", 1).await }
+        });
+        let waiting = |downloads: &Downloads| -> Vec<(String, bool)> {
+            downloads.list().into_iter().map(|d| (d.label, d.waiting)).collect()
+        };
+        while downloads.list().len() < 3 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            waiting(&downloads),
+            [
+                ("Claude Code".into(), false),
+                ("Browser engine 157".into(), true),
+                ("Zwiim 0.6.0".into(), true),
+            ]
+        );
+        // A page's download is never held back.
+        let page = downloads.begin("report.pdf", 1);
+        assert!(!downloads.list()[3].waiting);
+        drop(page);
+
+        drop(first);
+        let second = second.await.unwrap();
+        assert_eq!(
+            waiting(&downloads),
+            [("Browser engine 157".into(), false), ("Zwiim 0.6.0".into(), true)]
+        );
+        drop(second);
+        let third = third.await.unwrap();
+        assert_eq!(waiting(&downloads), [("Zwiim 0.6.0".into(), false)]);
+        drop(third);
+        assert!(downloads.list().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_queued_download_given_up_while_waiting_is_unlisted() {
+        let downloads = Downloads::new();
+        let first = downloads.queue("Claude Code", 2).await;
+        let given_up = tokio::time::timeout(Duration::from_millis(10), downloads.queue("Codex", 2)).await;
+        assert!(given_up.is_err());
+        assert_eq!(downloads.list().len(), 1);
+        drop(first);
+        // The turn passes on: the next one does not wait.
+        let next = tokio::time::timeout(Duration::from_secs(1), downloads.queue("Codex", 2)).await;
+        assert!(next.is_ok());
     }
 
     #[test]
