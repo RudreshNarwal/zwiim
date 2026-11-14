@@ -169,7 +169,7 @@ export const TABS: readonly TabDef[] = [
     label: "Agents",
     icon: Bot,
     group: "Host",
-    keywords: ["claude", "codex", "sign in", "login", "api key", "provider"],
+    keywords: ["claude", "codex", "opencode", "sign in", "login", "api key", "provider"],
     panel: (ctx) => <AgentsSettings remote={ctx.remote} />,
   },
   {

@@ -505,6 +505,18 @@ describe("how an agent's sign-in reads (read only)", () => {
     expect(agentSignInRow({ ...base, agent: "codex", sign_in: "running" }).state).toBe("Signing in…");
     expect(agentSignInRow({ ...base, agent: "codex" })).toMatchObject({ state: "Not signed in", dot: "idle" });
   });
+
+  it("shows OpenCode on its free models, or on a saved key", () => {
+    expect(agentSignInRow({ ...base, agent: "open_code", connected: true, method: "free" })).toEqual({
+      name: "OpenCode",
+      state: "Free models",
+      detail: null,
+      dot: "done",
+    });
+    expect(
+      agentSignInRow({ ...base, agent: "open_code", connected: true, method: "api_key", saved_key: true }).state,
+    ).toBe("API key");
+  });
 });
 
 describe("starting a session", () => {
