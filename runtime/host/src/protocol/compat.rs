@@ -468,7 +468,18 @@ use serde::{Deserialize, Serialize};
 /// `tool_calls`) carries `input`, its arguments as JSON text (at most 2,000
 /// characters), so a running call can say what it acts on. Other tools carry
 /// none. Older clients ignore the field.
-pub const PROTOCOL_REVISION: u32 = 33;
+///
+/// 34 (OpenCode): `open_code` is host-managed and `supported` like Claude
+/// Code and Codex: `agent.list` carries its `adapter`, `agent.setup` installs
+/// it, and `agent.auth_status` lists it third. Its keys are per provider:
+/// `agent.save_key` and `agent.remove_key` take `provider` (a models.dev
+/// provider id that takes an API key) for `open_code`, and refuse it for
+/// the others with `invalid_request`; an unknown provider is
+/// `invalid_input`. Its status always reads `connected` (OpenCode's free
+/// models need no sign-in), with method `free` when nothing else applies,
+/// and carries `saved_providers`, the providers a key is saved for (left out
+/// when none). `agent.sign_in` is `invalid_request` for it.
+pub const PROTOCOL_REVISION: u32 = 34;
 
 /// Oldest client revision this Host serves. Raise only after a release that
 /// reported `client_deprecated`-era clients (see the R9 design, §5.5).
@@ -692,7 +703,12 @@ mod tests {
     #[test]
     fn the_browser_is_served() {
         assert!(CAPABILITIES.contains(&"browser"));
-        assert_eq!(PROTOCOL_REVISION, 33);
+        const _: () = assert!(PROTOCOL_REVISION >= 33);
+    }
+
+    #[test]
+    fn opencode_is_revision_34() {
+        assert_eq!(PROTOCOL_REVISION, 34);
     }
 
     #[test]

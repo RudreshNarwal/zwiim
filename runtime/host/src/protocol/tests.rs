@@ -5119,6 +5119,101 @@ async fn agent_sign_in_status_reaches_every_client_and_never_a_key() {
 }
 
 #[tokio::test]
+async fn save_key_for_open_code_needs_a_known_api_provider() {
+    let h = host(false).await;
+    let key = "sk-or-test-protocol-0001";
+    // Without a provider, an OpenCode key has nowhere to go.
+    let (status, value) = h
+        .call("agent.save_key", json!({"agent": "open_code", "key": key}))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(value["error"]["code"], "invalid_request");
+    assert!(!value.to_string().contains(key), "{value}");
+    // A provider that is unknown, or signs in another way, takes no key.
+    for provider in ["nope", "openai"] {
+        let (status, value) = h
+            .call(
+                "agent.save_key",
+                json!({"agent": "open_code", "key": key, "provider": provider}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{provider}");
+        assert_eq!(value["error"]["code"], "invalid_input", "{provider}");
+        assert!(!value.to_string().contains(key), "{value}");
+    }
+
+    let saved = h
+        .ok(
+            "agent.save_key",
+            json!({"agent": "open_code", "key": key, "provider": "openrouter"}),
+        )
+        .await;
+    assert_eq!(saved["agent"], "open_code");
+    assert_eq!(saved["connected"], true, "{saved}");
+    assert_eq!(saved["saved_key"], true, "{saved}");
+    assert_eq!(saved["saved_providers"], json!(["openrouter"]), "{saved}");
+    assert!(!saved.to_string().contains(key), "{saved}");
+    let all = h.ok("agent.auth_status", json!({})).await;
+    assert!(!all.to_string().contains(key), "{all}");
+
+    // A provider is needed to remove one too.
+    let (status, code) = h
+        .err("agent.remove_key", json!({"agent": "open_code"}))
+        .await;
+    assert_eq!(
+        (status, code.as_str()),
+        (StatusCode::BAD_REQUEST, "invalid_request")
+    );
+    let removed = h
+        .ok(
+            "agent.remove_key",
+            json!({"agent": "open_code", "provider": "openrouter"}),
+        )
+        .await;
+    assert_eq!(removed["saved_key"], false, "{removed}");
+    assert!(removed.get("saved_providers").is_none(), "{removed}");
+}
+
+#[tokio::test]
+async fn save_key_refuses_a_provider_for_claude_and_codex() {
+    let h = host(false).await;
+    for agent in ["claude_code", "codex"] {
+        let (status, code) = h
+            .err(
+                "agent.save_key",
+                json!({"agent": agent, "key": "sk-ant-x-0001", "provider": "anthropic"}),
+            )
+            .await;
+        assert_eq!(
+            (status, code.as_str()),
+            (StatusCode::BAD_REQUEST, "invalid_request"),
+            "{agent}"
+        );
+        let (status, code) = h
+            .err(
+                "agent.remove_key",
+                json!({"agent": agent, "provider": "anthropic"}),
+            )
+            .await;
+        assert_eq!(
+            (status, code.as_str()),
+            (StatusCode::BAD_REQUEST, "invalid_request"),
+            "{agent}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn open_code_has_no_browser_sign_in() {
+    let h = host(false).await;
+    let (status, code) = h.err("agent.sign_in", json!({"agent": "open_code"})).await;
+    assert_eq!(
+        (status, code.as_str()),
+        (StatusCode::BAD_REQUEST, "invalid_request")
+    );
+}
+
+#[tokio::test]
 async fn a_rejected_key_is_never_echoed() {
     let h = host(false).await;
     let (status, value) = h
