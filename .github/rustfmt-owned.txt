@@ -25,6 +25,7 @@ runtime/host/tests/provider_live.rs
 clients/desktop/src-tauri/src/login.rs
 clients/desktop/src-tauri/src/lid_helper.rs
 runtime/host/src/agent_auth.rs
+runtime/host/src/agent_auth/opencode.rs
 runtime/host/src/agent_auth/tests.rs
 runtime/host/src/redact.rs
 runtime/host/src/power/mod.rs

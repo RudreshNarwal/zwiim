@@ -21,6 +21,8 @@ use zeroize::Zeroizing;
 use crate::adapters::{self, ManagedAdapter};
 use crate::models::agent::AgentType;
 
+mod opencode;
+
 const KEYCHAIN_SERVICE: &str = "zwiim";
 /// The key file of the `file` store (`ZWIIM_HOST_KEY_STORE=file`).
 const KEY_FILE: &str = "agent-keys.json";
@@ -37,8 +39,7 @@ fn key_var(adapter: ManagedAdapter) -> &'static str {
     match adapter {
         ManagedAdapter::Claude => "ANTHROPIC_API_KEY",
         ManagedAdapter::Codex => "CODEX_API_KEY",
-        // OpenCode Zen's own key; other providers' keys go to their own
-        // variables.
+        // Unused: OpenCode's keys are per provider (see `opencode`).
         ManagedAdapter::OpenCode => "OPENCODE_API_KEY",
     }
 }
@@ -62,6 +63,8 @@ pub enum Method {
     ApiKey,
     /// A cloud provider (Bedrock, Vertex, Foundry) set up in the agent's env.
     Cloud,
+    /// No sign-in: OpenCode's free models.
+    Free,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -86,6 +89,9 @@ pub struct AgentAuthStatus {
     pub sign_in: SignIn,
     pub email: Option<String>,
     pub plan: Option<String>,
+    /// OpenCode: the providers an API key is saved for (never the keys).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub saved_providers: Vec<String>,
 }
 
 /// `agent`'s sign-in on this Host; `env` is the agent's configured launch
@@ -93,6 +99,9 @@ pub struct AgentAuthStatus {
 /// not manage.
 pub fn status(agent: AgentType, env: &BTreeMap<String, String>) -> Option<AgentAuthStatus> {
     let adapter = ManagedAdapter::for_agent(agent)?;
+    if adapter == ManagedAdapter::OpenCode {
+        return Some(opencode_status(env, &adapters::inherited_env));
+    }
     let method = match adapter {
         ManagedAdapter::Claude => claude_method(
             env,
@@ -105,7 +114,7 @@ pub fn status(agent: AgentType, env: &BTreeMap<String, String>) -> Option<AgentA
             &adapters::inherited_env,
             &crate::commands::acp::codex_home_dir(),
         ),
-        ManagedAdapter::OpenCode => None,
+        ManagedAdapter::OpenCode => unreachable!("answered above"),
     };
     let (email, plan) = match method {
         Some(Method::Account) => account_details(adapter),
@@ -119,7 +128,41 @@ pub fn status(agent: AgentType, env: &BTreeMap<String, String>) -> Option<AgentA
         sign_in: sign_in_state(adapter),
         email,
         plan,
+        saved_providers: Vec::new(),
     })
+}
+
+/// OpenCode is always connected: its free models need no sign-in. A saved
+/// key it will use reads as `api_key`, a provider signed in through its own
+/// `opencode auth login` as `account`.
+fn opencode_status(
+    env: &BTreeMap<String, String>,
+    inherited: &dyn Fn(&str) -> Option<String>,
+) -> AgentAuthStatus {
+    let keys = saved_opencode_keys();
+    let own = opencode::own_logins(&crate::parsers::opencode::resolve_opencode_base_dir());
+    let key_in_use = keys.keys().any(|provider| {
+        !own.contains(provider)
+            && opencode::provider_env(provider)
+                .is_some_and(|var| adapters::credential_set(env, inherited, var))
+    });
+    let method = if key_in_use {
+        Method::ApiKey
+    } else if !own.is_empty() {
+        Method::Account
+    } else {
+        Method::Free
+    };
+    AgentAuthStatus {
+        agent: AgentType::OpenCode,
+        connected: true,
+        method: Some(method),
+        saved_key: !keys.is_empty(),
+        sign_in: SignIn::Idle,
+        email: None,
+        plan: None,
+        saved_providers: keys.into_keys().collect(),
+    }
 }
 
 /// Claude Code's own precedence: a cloud provider, then a key or token in its
@@ -477,9 +520,8 @@ async fn persist(adapter: ManagedAdapter, key: Option<Zeroizing<String>>) -> Res
     Ok(())
 }
 
-/// A key as typed, checked: no surrounding space, one line, the provider's
-/// shape.
-fn checked_key(adapter: ManagedAdapter, key: &str) -> Result<Zeroizing<String>, AuthError> {
+/// A key as typed, checked: no surrounding space, one line.
+fn checked_shape(key: &str) -> Result<&str, AuthError> {
     let key = key.trim();
     if key.is_empty() {
         return Err(AuthError::InvalidKey("Enter an API key."));
@@ -487,6 +529,12 @@ fn checked_key(adapter: ManagedAdapter, key: &str) -> Result<Zeroizing<String>, 
     if key.len() > MAX_KEY_LEN || key.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(AuthError::InvalidKey("That is not an API key."));
     }
+    Ok(key)
+}
+
+/// A key as typed, checked: [`checked_shape`] and the provider's prefix.
+fn checked_key(adapter: ManagedAdapter, key: &str) -> Result<Zeroizing<String>, AuthError> {
+    let key = checked_shape(key)?;
     if !key.starts_with(key_prefix(adapter)) {
         return Err(AuthError::InvalidKey(match adapter {
             ManagedAdapter::Claude => "Anthropic API keys start with sk-ant-.",
@@ -500,6 +548,11 @@ fn checked_key(adapter: ManagedAdapter, key: &str) -> Result<Zeroizing<String>, 
 /// Save `key` for `agent`, replacing any saved before. A key Codex once wrote
 /// to its own `auth.json` goes: the Host keeps the key from now on.
 pub async fn save_key(adapter: ManagedAdapter, key: &str) -> Result<(), AuthError> {
+    if adapter == ManagedAdapter::OpenCode {
+        return Err(AuthError::InvalidKey(
+            "Choose the provider this key is for.",
+        ));
+    }
     let key = checked_key(adapter, key)?;
     persist(adapter, Some(key)).await?;
     if adapter == ManagedAdapter::Codex {
@@ -517,6 +570,47 @@ pub async fn remove_key(adapter: ManagedAdapter) -> Result<(), AuthError> {
     Ok(())
 }
 
+/// OpenCode's saved keys, by provider.
+fn saved_opencode_keys() -> opencode::ProviderKeys {
+    saved_key(ManagedAdapter::OpenCode)
+        .map(|raw| opencode::decode(&raw))
+        .unwrap_or_default()
+}
+
+/// The OpenCode providers an API key is saved for.
+pub fn saved_providers() -> Vec<String> {
+    saved_opencode_keys().into_keys().collect()
+}
+
+/// Save `key` for OpenCode's `provider` (a models.dev provider id that takes
+/// an API key), replacing any saved for it before.
+pub async fn save_provider_key(provider: &str, key: &str) -> Result<(), AuthError> {
+    if opencode::provider_env(provider).is_none() {
+        return Err(AuthError::InvalidKey(
+            "That provider does not take an API key.",
+        ));
+    }
+    let key = Zeroizing::new(checked_shape(key)?.to_string());
+    let mut keys = saved_opencode_keys();
+    keys.insert(provider.to_string(), key);
+    persist(ManagedAdapter::OpenCode, Some(opencode::encode(&keys))).await?;
+    forget_cached(ManagedAdapter::OpenCode);
+    tracing::info!("[agent-auth] opencode {provider} API key saved");
+    Ok(())
+}
+
+/// Delete OpenCode's saved key for `provider`; the last one removes the
+/// Keychain item.
+pub async fn remove_provider_key(provider: &str) -> Result<(), AuthError> {
+    let mut keys = saved_opencode_keys();
+    keys.remove(provider);
+    let stored = (!keys.is_empty()).then(|| opencode::encode(&keys));
+    persist(ManagedAdapter::OpenCode, stored).await?;
+    forget_cached(ManagedAdapter::OpenCode);
+    tracing::info!("[agent-auth] opencode {provider} API key removed");
+    Ok(())
+}
+
 /// Codex's `auth.json` when it holds a plaintext key rather than a ChatGPT
 /// login.
 fn remove_codex_saved_key_file(codex_home: &Path) {
@@ -531,6 +625,11 @@ pub fn apply_saved_key(agent: AgentType, env: &mut BTreeMap<String, String>) {
     let Some(adapter) = ManagedAdapter::for_agent(agent) else {
         return;
     };
+    if adapter == ManagedAdapter::OpenCode {
+        let own = opencode::own_logins(&crate::parsers::opencode::resolve_opencode_base_dir());
+        opencode::hand_over(&saved_opencode_keys(), &own, &adapters::inherited_env, env);
+        return;
+    }
     let Some(key) = saved_key(adapter) else {
         return;
     };
@@ -545,7 +644,7 @@ pub fn apply_saved_key(agent: AgentType, env: &mut BTreeMap<String, String>) {
             adapters::codex_api_key_present(env, &adapters::inherited_env)
                 || codex_login(&crate::commands::acp::codex_home_dir()) == CodexLogin::ChatGpt
         }
-        ManagedAdapter::OpenCode => false,
+        ManagedAdapter::OpenCode => unreachable!("handed over above"),
     };
     hand_over(adapter, &key, signed_in, env);
 }

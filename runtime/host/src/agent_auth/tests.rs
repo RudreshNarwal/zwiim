@@ -500,3 +500,144 @@ fn status_is_only_for_managed_agents_and_never_carries_the_key() {
     );
     with_keys(|keys| keys.remove(&ManagedAdapter::Codex));
 }
+
+// ─── OpenCode: a key per provider ───────────────────────────────────────
+
+/// `apply_saved_key` for OpenCode with its data home at `data` and no
+/// provider key in the Host's environment.
+fn opencode_env(data: &Path, env: &[(&str, &str)]) -> BTreeMap<String, String> {
+    temp_env::with_vars(
+        [
+            ("XDG_DATA_HOME", Some(data.to_str().unwrap())),
+            ("ANTHROPIC_API_KEY", None),
+            ("OPENROUTER_API_KEY", None),
+        ],
+        || {
+            let mut env = env_of(env);
+            apply_saved_key(AgentType::OpenCode, &mut env);
+            env
+        },
+    )
+}
+
+#[tokio::test]
+async fn opencode_saved_key_reaches_its_provider_env() {
+    let data = tempfile::tempdir().unwrap();
+    save_provider_key("anthropic", "sk-ant-test-1")
+        .await
+        .unwrap();
+    let env = opencode_env(data.path(), &[]);
+    assert_eq!(
+        env.get("ANTHROPIC_API_KEY").map(String::as_str),
+        Some("sk-ant-test-1")
+    );
+    assert!(!env.contains_key("OPENROUTER_API_KEY"), "{env:?}");
+    assert_eq!(saved_providers(), ["anthropic"]);
+
+    remove_provider_key("anthropic").await.unwrap();
+    assert!(saved_providers().is_empty());
+    assert!(!opencode_env(data.path(), &[]).contains_key("ANTHROPIC_API_KEY"));
+}
+
+#[tokio::test]
+async fn opencode_key_in_env_is_not_replaced() {
+    let data = tempfile::tempdir().unwrap();
+    save_provider_key("anthropic", "sk-ant-test-1")
+        .await
+        .unwrap();
+    let env = opencode_env(data.path(), &[("ANTHROPIC_API_KEY", "mine")]);
+    assert_eq!(
+        env.get("ANTHROPIC_API_KEY").map(String::as_str),
+        Some("mine")
+    );
+}
+
+#[tokio::test]
+async fn opencode_own_login_wins_over_saved_key() {
+    let data = tempfile::tempdir().unwrap();
+    write(
+        &data.path().join("opencode/auth.json"),
+        r#"{"anthropic":{"type":"api","key":"x"}}"#,
+    );
+    save_provider_key("anthropic", "sk-ant-test-1")
+        .await
+        .unwrap();
+    save_provider_key("openrouter", "sk-or-test-1")
+        .await
+        .unwrap();
+    let env = opencode_env(data.path(), &[]);
+    assert!(!env.contains_key("ANTHROPIC_API_KEY"), "{env:?}");
+    assert_eq!(
+        env.get("OPENROUTER_API_KEY").map(String::as_str),
+        Some("sk-or-test-1")
+    );
+}
+
+#[tokio::test]
+async fn opencode_is_connected_with_no_key() {
+    let data = tempfile::tempdir().unwrap();
+    let s = temp_env::with_var("XDG_DATA_HOME", Some(data.path()), || {
+        status(AgentType::OpenCode, &env_of(&[])).unwrap()
+    });
+    assert!(s.connected);
+    assert_eq!(s.method, Some(Method::Free));
+    assert!(!s.saved_key);
+    assert!(s.saved_providers.is_empty());
+
+    // Its own `opencode auth login` reads as an account sign-in.
+    write(
+        &data.path().join("opencode/auth.json"),
+        r#"{"openrouter":{"type":"api","key":"x"}}"#,
+    );
+    let s = temp_env::with_var("XDG_DATA_HOME", Some(data.path()), || {
+        status(AgentType::OpenCode, &env_of(&[])).unwrap()
+    });
+    assert_eq!(s.method, Some(Method::Account));
+}
+
+#[tokio::test]
+async fn opencode_unknown_provider_is_refused() {
+    for provider in ["nope", "openai", ""] {
+        let err = save_provider_key(provider, "k-123").await.unwrap_err();
+        assert!(matches!(err, AuthError::InvalidKey(_)), "{provider}: {err}");
+    }
+    assert!(matches!(
+        save_provider_key("anthropic", "two words").await,
+        Err(AuthError::InvalidKey(_))
+    ));
+    // OpenCode's key is per provider: the one-key form is refused.
+    assert!(matches!(
+        save_key(ManagedAdapter::OpenCode, "k-123").await,
+        Err(AuthError::InvalidKey(_))
+    ));
+    assert!(saved_providers().is_empty());
+}
+
+#[tokio::test]
+async fn opencode_keys_never_reach_status_json() {
+    let data = tempfile::tempdir().unwrap();
+    save_provider_key("anthropic", "sk-ant-secret-9")
+        .await
+        .unwrap();
+    let s = temp_env::with_var("XDG_DATA_HOME", Some(data.path()), || {
+        let mut env = env_of(&[]);
+        apply_saved_key(AgentType::OpenCode, &mut env);
+        status(AgentType::OpenCode, &env).unwrap()
+    });
+    assert_eq!(s.method, Some(Method::ApiKey));
+    assert!(s.saved_key);
+    assert_eq!(s.saved_providers, ["anthropic"]);
+    let json = serde_json::to_string(&s).unwrap();
+    assert!(!json.contains("sk-ant-secret-9"), "{json}");
+}
+
+#[test]
+fn only_api_providers_have_a_key_variable() {
+    assert_eq!(opencode::provider_env("opencode"), Some("OPENCODE_API_KEY"));
+    assert_eq!(
+        opencode::provider_env("anthropic"),
+        Some("ANTHROPIC_API_KEY")
+    );
+    assert_eq!(opencode::provider_env("openai"), None, "oauth only");
+    assert_eq!(opencode::provider_env("nope"), None);
+}
