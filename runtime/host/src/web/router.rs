@@ -955,14 +955,6 @@ pub fn build_router(
             post(handlers::acp::codex_bundled_catalog),
         )
         .route(
-            "/opencode_install_plugins",
-            post(handlers::acp::opencode_install_plugins),
-        )
-        .route(
-            "/opencode_uninstall_plugin",
-            post(handlers::acp::opencode_uninstall_plugin),
-        )
-        .route(
             "/codex_request_device_code",
             post(handlers::acp::codex_request_device_code),
         )

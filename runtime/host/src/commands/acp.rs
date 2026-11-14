@@ -2795,14 +2795,6 @@ fn resolve_opencode_config_path() -> PathBuf {
     primary
 }
 
-fn opencode_auth_json_path() -> PathBuf {
-    crate::parsers::opencode::resolve_opencode_base_dir().join("auth.json")
-}
-
-fn load_opencode_auth_json_raw() -> Option<String> {
-    fs::read_to_string(opencode_auth_json_path()).ok()
-}
-
 // ---------------------------------------------------------------------------
 // Cline config helpers
 // ---------------------------------------------------------------------------
@@ -4770,24 +4762,6 @@ fn set_or_remove_grok_number(
             }
         }
     }
-    Ok(())
-}
-
-fn persist_opencode_auth_json(raw_auth: &str) -> Result<(), AcpError> {
-    let parsed = serde_json::from_str::<serde_json::Value>(raw_auth)
-        .map_err(|e| AcpError::protocol(format!("invalid opencode auth.json: {e}")))?;
-    if !parsed.is_object() {
-        return Err(AcpError::protocol(
-            "invalid opencode auth.json: root must be a JSON object",
-        ));
-    }
-    let path = opencode_auth_json_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| AcpError::protocol(format!("create opencode directory failed: {e}")))?;
-    }
-    write_credential_file(&path, &format!("{raw_auth}\n"))
-        .map_err(|e| AcpError::protocol(format!("write opencode auth.json failed: {e}")))?;
     Ok(())
 }
 
@@ -10207,23 +10181,13 @@ fn cascade_update_agent_config(
             persist_codex_native_config_files(Some(&auth_str), Some(&toml_str))?;
         }
         AgentType::OpenCode => {
-            let auth_path = opencode_auth_json_path();
-            let mut auth_obj = if auth_path.exists() {
-                fs::read_to_string(&auth_path)
-                    .ok()
-                    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-                    .filter(|v| v.is_object())
-                    .unwrap_or_else(|| serde_json::json!({}))
-            } else {
-                serde_json::json!({})
-            };
+            // Zwiim never writes OpenCode's `auth.json`: its keys are kept in
+            // the Keychain (`agent.save_key`) and handed over at launch.
             if !api_key.trim().is_empty() {
-                auth_obj["api_key"] = serde_json::Value::String(api_key.to_string());
+                return Err(AcpError::protocol(
+                    "OpenCode keys are kept by the Host: save them with agent.save_key",
+                ));
             }
-            let auth_str = serde_json::to_string_pretty(&auth_obj)
-                .map_err(|e| AcpError::protocol(e.to_string()))?;
-            persist_opencode_auth_json(&auth_str)?;
-
             let patch = serde_json::json!({ "apiBaseUrl": api_url });
             let patch_str =
                 serde_json::to_string(&patch).map_err(|e| AcpError::protocol(e.to_string()))?;
@@ -10587,7 +10551,6 @@ pub(crate) async fn acp_update_agent_preferences_and_refresh(
     enabled: bool,
     env: BTreeMap<String, String>,
     config_json: Option<String>,
-    opencode_auth_json: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     db: &AppDatabase,
@@ -10600,7 +10563,6 @@ pub(crate) async fn acp_update_agent_preferences_and_refresh(
         enabled,
         env,
         config_json,
-        opencode_auth_json,
         codex_auth_json,
         codex_config_toml,
         db,
@@ -11206,11 +11168,6 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
         } else {
             None
         };
-        let opencode_auth_json = if agent_type == AgentType::OpenCode {
-            load_opencode_auth_json_raw()
-        } else {
-            None
-        };
         let codex_config_toml = if agent_type == AgentType::Codex {
             load_codex_config_toml_raw()
         } else {
@@ -11297,7 +11254,6 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
             config_json,
             config_file_path: agent_local_config_path(agent_type)
                 .map(|path| path.display().to_string()),
-            opencode_auth_json,
             codex_auth_json,
             codex_config_toml,
             codex_sandbox_settings,
@@ -11377,7 +11333,6 @@ pub(crate) async fn acp_update_agent_preferences_core(
     enabled: bool,
     env: BTreeMap<String, String>,
     config_json: Option<String>,
-    opencode_auth_json: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     db: &AppDatabase,
@@ -11433,10 +11388,7 @@ pub(crate) async fn acp_update_agent_preferences_core(
     }
 
     if agent_type == AgentType::OpenCode {
-        persist_opencode_native_config(
-            opencode_auth_json.as_deref(),
-            config_json.as_deref(),
-        )?;
+        persist_opencode_native_config(config_json.as_deref())?;
         emit_acp_agents_updated(emitter, "preferences_updated", Some(agent_type));
         return Ok(());
     }
@@ -11476,7 +11428,6 @@ pub async fn acp_update_agent_preferences(
     enabled: bool,
     env: BTreeMap<String, String>,
     config_json: Option<String>,
-    opencode_auth_json: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     manager: State<'_, ConnectionManager>,
@@ -11494,7 +11445,6 @@ pub async fn acp_update_agent_preferences(
         enabled,
         env,
         config_json,
-        opencode_auth_json,
         codex_auth_json,
         codex_config_toml,
         &db,
@@ -11757,27 +11707,10 @@ pub async fn acp_update_agent_env(
 /// `{}` so clearing the last credential truncates the file instead of being
 /// skipped — otherwise a stale key would survive on disk and the disconnected
 /// provider would reappear after reload.
-fn opencode_auth_payload_to_write(raw: Option<&str>) -> Option<String> {
-    let trimmed = raw?.trim();
-    Some(if trimmed.is_empty() {
-        "{}".to_string()
-    } else {
-        trimmed.to_string()
-    })
-}
-
-/// Persist OpenCode's native files (`auth.json` + `opencode.json`) for a
-/// config/preferences save. Shared by both the config and preferences commands
-/// so the empty-auth handling can't drift between the two exposed paths. An
-/// explicitly empty auth payload truncates `auth.json` to `{}`; `None` leaves
-/// each file untouched.
-fn persist_opencode_native_config(
-    opencode_auth_json: Option<&str>,
-    config_json: Option<&str>,
-) -> Result<(), AcpError> {
-    if let Some(auth) = opencode_auth_payload_to_write(opencode_auth_json) {
-        persist_opencode_auth_json(&auth)?;
-    }
+/// Persist OpenCode's `opencode.json` for a config/preferences save. Shared by
+/// both the config and preferences commands. OpenCode's `auth.json` is never
+/// written: its keys are kept in the Keychain (`agent_auth`).
+fn persist_opencode_native_config(config_json: Option<&str>) -> Result<(), AcpError> {
     if let Some(raw) = config_json {
         persist_agent_local_config_json(AgentType::OpenCode, Some(raw))?;
     }
@@ -11788,7 +11721,6 @@ fn persist_opencode_native_config(
 pub(crate) async fn acp_update_agent_config_core(
     agent_type: AgentType,
     config_json: Option<String>,
-    opencode_auth_json: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_model_catalog: Option<String>,
@@ -11926,10 +11858,7 @@ pub(crate) async fn acp_update_agent_config_core(
     }
 
     if agent_type == AgentType::OpenCode {
-        persist_opencode_native_config(
-            opencode_auth_json.as_deref(),
-            config_json.as_deref(),
-        )?;
+        persist_opencode_native_config(config_json.as_deref())?;
         emit_acp_agents_updated(emitter, "config_updated", Some(agent_type));
         return Ok(());
     }
@@ -11962,7 +11891,6 @@ pub(crate) async fn acp_update_agent_config_core(
 pub(crate) async fn acp_update_agent_config_and_refresh(
     agent_type: AgentType,
     config_json: Option<String>,
-    opencode_auth_json: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_model_catalog: Option<String>,
@@ -11979,7 +11907,6 @@ pub(crate) async fn acp_update_agent_config_and_refresh(
     acp_update_agent_config_core(
         agent_type,
         config_json,
-        opencode_auth_json,
         codex_auth_json,
         codex_config_toml,
         codex_model_catalog,
@@ -12000,7 +11927,6 @@ pub(crate) async fn acp_update_agent_config_and_refresh(
 pub async fn acp_update_agent_config(
     agent_type: AgentType,
     config_json: Option<String>,
-    opencode_auth_json: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_model_catalog: Option<String>,
@@ -12022,7 +11948,6 @@ pub async fn acp_update_agent_config(
     acp_update_agent_config_and_refresh(
         agent_type,
         config_json,
-        opencode_auth_json,
         codex_auth_json,
         codex_config_toml,
         codex_model_catalog,
@@ -13434,40 +13359,6 @@ pub async fn codex_bundled_catalog(
     force_refresh: Option<bool>,
 ) -> Result<Vec<serde_json::Value>, AcpError> {
     Ok(codex_bundled_catalog_core(force_refresh.unwrap_or(false)).await)
-}
-
-pub(crate) async fn opencode_install_plugins_core(
-    names: Option<Vec<String>>,
-    task_id: String,
-    emitter: &EventEmitter,
-) -> Result<(), AcpError> {
-    opencode_plugins::install_missing_plugins(names, task_id, emitter)
-        .await
-        .map_err(AcpError::Protocol)
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn opencode_install_plugins(
-    names: Option<Vec<String>>,
-    task_id: String,
-    app: tauri::AppHandle,
-) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
-    opencode_install_plugins_core(names, task_id, &emitter).await
-}
-
-pub(crate) async fn opencode_uninstall_plugin_core(
-    name: String,
-) -> Result<PluginCheckSummary, AcpError> {
-    opencode_plugins::uninstall_plugin(name)
-        .await
-        .map_err(AcpError::Protocol)
-}
-
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn opencode_uninstall_plugin(name: String) -> Result<PluginCheckSummary, AcpError> {
-    opencode_uninstall_plugin_core(name).await
 }
 
 // ─── Codex Device Code OAuth ───
@@ -15548,76 +15439,31 @@ base_url = \"https://example.test/v1\"
         });
     }
 
+    // Zwiim keeps OpenCode's keys in the Keychain (`agent_auth`) and never
+    // writes its `auth.json`; both config paths route through
+    // persist_opencode_native_config.
     #[test]
-    fn opencode_auth_empty_payload_truncates_to_empty_object() {
-        // Clearing the last credential sends "" — it must persist `{}` (clearing
-        // the file), not be skipped (which would strand a stale key on disk).
-        assert_eq!(
-            opencode_auth_payload_to_write(Some("")),
-            Some("{}".to_string())
-        );
-        assert_eq!(
-            opencode_auth_payload_to_write(Some("   \n")),
-            Some("{}".to_string())
-        );
-    }
-
-    #[test]
-    fn opencode_auth_payload_preserves_non_empty_and_skips_none() {
-        let json = r#"{"openai":{"type":"api","key":"k"}}"#;
-        assert_eq!(
-            opencode_auth_payload_to_write(Some(json)),
-            Some(json.to_string())
-        );
-        // No payload supplied → leave auth.json untouched.
-        assert_eq!(opencode_auth_payload_to_write(None), None);
-    }
-
-    // Call-site guard: both acp_update_agent_config_core and
-    // acp_update_agent_preferences_core route OpenCode persistence through
-    // persist_opencode_native_config, so testing it covers both exposed paths.
-    #[test]
-    fn persist_opencode_native_config_empty_auth_clears_file() {
+    fn opencode_native_config_leaves_auth_json_alone() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        // Pin HOME and clear XDG_DATA_HOME so the auth path resolves under the
-        // temp dir regardless of the developer's environment.
+        let data = tmp.path().join("xdg-data");
+        let cfg = tmp.path().join("xdg-config");
         temp_env::with_vars(
             [
                 ("HOME", Some(tmp.path())),
-                ("XDG_DATA_HOME", None::<&std::path::Path>),
+                ("XDG_DATA_HOME", Some(data.as_path())),
+                ("XDG_CONFIG_HOME", Some(cfg.as_path())),
             ],
             || {
-                let auth_path = opencode_auth_json_path();
-                fs::create_dir_all(auth_path.parent().unwrap()).expect("mkdir");
-                fs::write(&auth_path, r#"{"openai":{"type":"api","key":"k"}}"#).expect("seed");
-
-                // Disconnecting the last provider sends an empty auth payload: it
-                // must truncate auth.json to {}, not strand the stale credential.
-                persist_opencode_native_config(Some(""), None).expect("persist");
-
-                assert_eq!(fs::read_to_string(&auth_path).unwrap().trim(), "{}");
-            },
-        );
-    }
-
-    #[test]
-    fn persist_opencode_native_config_none_auth_leaves_file() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        temp_env::with_vars(
-            [
-                ("HOME", Some(tmp.path())),
-                ("XDG_DATA_HOME", None::<&std::path::Path>),
-            ],
-            || {
-                let auth_path = opencode_auth_json_path();
+                let auth_path = data.join("opencode").join("auth.json");
                 fs::create_dir_all(auth_path.parent().unwrap()).expect("mkdir");
                 let original = "{\"openai\":{\"type\":\"api\",\"key\":\"k\"}}\n";
                 fs::write(&auth_path, original).expect("seed");
 
-                // No auth payload supplied → file untouched.
-                persist_opencode_native_config(None, None).expect("persist");
+                persist_opencode_native_config(Some(r#"{"model":"opencode/big-pickle"}"#))
+                    .expect("persist");
 
                 assert_eq!(fs::read_to_string(&auth_path).unwrap(), original);
+                assert!(opencode_primary_config_path().is_file());
             },
         );
     }
@@ -15654,10 +15500,6 @@ base_url = \"https://example.test/v1\"
                 assert_eq!(
                     opencode_primary_config_path(),
                     cfg.join("opencode").join("opencode.json")
-                );
-                assert_eq!(
-                    opencode_auth_json_path(),
-                    data.join("opencode").join("auth.json")
                 );
             },
         );

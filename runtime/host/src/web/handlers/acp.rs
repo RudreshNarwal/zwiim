@@ -643,7 +643,6 @@ pub struct AcpUpdateAgentPreferencesParams {
     pub enabled: bool,
     pub env: BTreeMap<String, String>,
     pub config_json: Option<String>,
-    pub opencode_auth_json: Option<String>,
     pub codex_auth_json: Option<String>,
     pub codex_config_toml: Option<String>,
 }
@@ -659,7 +658,6 @@ pub async fn acp_update_agent_preferences(
         params.enabled,
         params.env,
         params.config_json,
-        params.opencode_auth_json,
         params.codex_auth_json,
         params.codex_config_toml,
         db,
@@ -707,7 +705,6 @@ pub async fn acp_update_agent_env(
 pub struct AcpUpdateAgentConfigParams {
     pub agent_type: AgentType,
     pub config_json: Option<String>,
-    pub opencode_auth_json: Option<String>,
     pub codex_auth_json: Option<String>,
     pub codex_config_toml: Option<String>,
     pub codex_model_catalog: Option<String>,
@@ -726,7 +723,6 @@ pub async fn acp_update_agent_config(
     let affected = acp_commands::acp_update_agent_config_and_refresh(
         params.agent_type,
         params.config_json,
-        params.opencode_auth_json,
         params.codex_auth_json,
         params.codex_config_toml,
         params.codex_model_catalog,
@@ -1303,42 +1299,6 @@ pub async fn codex_bundled_catalog(
     Ok(Json(
         acp_commands::codex_bundled_catalog_core(params.force_refresh.unwrap_or(false)).await,
     ))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OpencodeInstallPluginsParams {
-    pub names: Option<Vec<String>>,
-    pub task_id: String,
-}
-
-pub async fn opencode_install_plugins(
-    Extension(state): Extension<Arc<AppState>>,
-    Json(params): Json<OpencodeInstallPluginsParams>,
-) -> Result<Json<()>, AppCommandError> {
-    let emitter = crate::web::event_bridge::EventEmitter::web_only(
-        state.event_broadcaster.clone(),
-        state.acp_event_bus.clone(),
-    );
-    acp_commands::opencode_install_plugins_core(params.names, params.task_id, &emitter)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OpencodeUninstallPluginParams {
-    pub name: String,
-}
-
-pub async fn opencode_uninstall_plugin(
-    Json(params): Json<OpencodeUninstallPluginParams>,
-) -> Result<Json<PluginCheckSummary>, AppCommandError> {
-    let result = acp_commands::opencode_uninstall_plugin_core(params.name)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(result))
 }
 
 pub async fn codex_request_device_code(
