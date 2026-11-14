@@ -966,3 +966,25 @@ async fn a_native_package_for_another_platform_is_not_fetched() {
         .join("opencode/1.19.5/opencode/bin/opencode")
         .is_file());
 }
+
+#[test]
+fn embedded_lock_has_one_opencode_package_per_platform() {
+    let opencode = &Lock::embedded().adapters["opencode"];
+    assert_eq!(opencode.runtime, super::lock::Runtime::Native);
+    assert_eq!(opencode.entry, "opencode/bin/opencode");
+    assert_eq!(opencode.args, ["acp"]);
+    for (os, cpu) in [
+        ("darwin", "arm64"),
+        ("darwin", "x64"),
+        ("linux", "x64"),
+        ("linux", "arm64"),
+    ] {
+        let platform = Platform { os, cpu };
+        let applies = opencode
+            .packages
+            .iter()
+            .filter(|p| p.applies_to(platform))
+            .count();
+        assert_eq!(applies, 1, "{os}-{cpu}");
+    }
+}
