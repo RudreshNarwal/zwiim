@@ -233,6 +233,9 @@ struct Usage {
     agent_at: HashMap<String, tokio::time::Instant>,
     /// Tabs the governor froze.
     frozen: std::collections::HashSet<String>,
+    /// Tabs the Host opened for a session's dev server that its agent has not
+    /// used yet (design 10.5).
+    shown: std::collections::HashSet<String>,
     /// When anyone last viewed a tab or used the browser tools.
     active_at: tokio::time::Instant,
     /// Why new tabs are refused, while they are.
@@ -582,6 +585,7 @@ impl BrowserService {
                 last_used: HashMap::new(),
                 agent_at: HashMap::new(),
                 frozen: std::collections::HashSet::new(),
+                shown: std::collections::HashSet::new(),
                 active_at: tokio::time::Instant::now(),
                 refuse: None,
                 background: false,
@@ -813,7 +817,9 @@ impl BrowserService {
                 };
                 self.open(owner, Some(&format!("{origin}/")))
                     .await
-                    .map(drop)
+                    .map(|tab| {
+                        self.usage_mut().shown.insert(tab.id);
+                    })
             }
             dev_servers::Choice::Leave => Ok(()),
         };
@@ -2091,6 +2097,22 @@ impl BrowserService {
         usage.last_used.remove(tab_id);
         usage.agent_at.remove(tab_id);
         usage.frozen.remove(tab_id);
+        usage.shown.remove(tab_id);
+    }
+
+    /// The tab the Host opened for session `session_id`'s dev server at
+    /// `url`'s origin, while its agent has not used it: the agent's own open
+    /// of that server takes it rather than adding a second tab.
+    pub async fn dev_server_tab(&self, session_id: &str, url: &str) -> Option<String> {
+        let origin = dev_servers::origin_of(url)?;
+        let tabs = self.list(Some(session_id)).await;
+        let usage = self.usage_mut();
+        tabs.into_iter()
+            .find(|t| {
+                usage.shown.contains(&t.id)
+                    && dev_servers::origin_of(&t.url).as_deref() == Some(origin.as_str())
+            })
+            .map(|t| t.id)
     }
 
     /// Someone is using the browser: out of the background priority at once
@@ -2137,6 +2159,7 @@ impl BrowserService {
         let now = tokio::time::Instant::now();
         usage.agent_at.insert(tab_id.to_string(), now);
         usage.last_used.insert(tab_id.to_string(), now);
+        usage.shown.remove(tab_id);
         usage.active_at = now;
     }
 
