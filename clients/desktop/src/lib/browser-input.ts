@@ -2,7 +2,7 @@
 // events in the page's CSS pixels, the shortcuts the panel keeps for itself,
 // and what an address bar entry means.
 
-import type { BrowserInput, BrowserModifiers } from "@zwiim/sdk";
+import { SEARCH_ENGINES, type BrowserInput, type BrowserModifiers, type SearchEngine } from "@zwiim/sdk";
 import { isModKey, platform, type Platform } from "@/lib/platform";
 
 type Modifiers = { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean };
@@ -104,13 +104,31 @@ export function browserShortcut(e: KeyLike, p: Platform = platform()): BrowserSh
 
 const LOCAL = /^(localhost|127(\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0)(:\d+)?([/?#]|$)/i;
 
+/** Where each search engine takes a query. */
+const SEARCHES: Record<SearchEngine, string> = {
+  google: "https://www.google.com/search?q=",
+  duckduckgo: "https://duckduckgo.com/?q=",
+  brave: "https://search.brave.com/search?q=",
+};
+
+/** The `browser.search_engine` setting's engine; Google when unset or unknown. */
+export function searchEngineOf(value: unknown): SearchEngine {
+  return SEARCH_ENGINES.find((e) => e === value) ?? "google";
+}
+
 /**
  * What an address bar entry opens: as typed with a scheme, `http://` for this
- * computer's own servers, `https://` otherwise. Null for an empty entry.
+ * computer's own servers, `https://` for another host (one with a dot or a
+ * port), and a search with `engine` for anything else. Null for an empty
+ * entry.
  */
-export function addressUrl(text: string): string | null {
+export function addressUrl(text: string, engine: SearchEngine = "google"): string | null {
   const t = text.trim();
   if (!t) return null;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(t) && !/^[^/]+:\d+([/?#]|$)/.test(t)) return t;
-  return `${LOCAL.test(t) ? "http" : "https"}://${t}`;
+  const spaced = /\s/.test(t);
+  if (!spaced && /^[a-z][a-z0-9+.-]*:/i.test(t) && !/^[^/]+:\d+([/?#]|$)/.test(t)) return t;
+  if (LOCAL.test(t)) return `http://${t}`;
+  const host = t.split(/[/?#]/)[0]!;
+  if (!spaced && (host.includes(".") || /:\d+$/.test(host))) return `https://${t}`;
+  return SEARCHES[engine] + encodeURIComponent(t);
 }

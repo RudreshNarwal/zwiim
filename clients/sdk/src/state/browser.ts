@@ -30,6 +30,8 @@ export interface BrowserState {
   /** Each tab's latest agent action; `seq` grows with every one (menus share it), so a repeat shows again. */
   agentActions: Record<string, { action: BrowserAgentAction; seq: number }>;
   agentSeq: number;
+  /** The tab the agent last worked in, by an action or any other browser tool; `seq` as `agentActions`. */
+  agentTab: { tab_id: string; seq: number } | null;
   /** Each tab's latest context menu; `seq` grows with every one. */
   menus: Record<string, { menu: BrowserMenu; seq: number }>;
   /** Each tab's latest ended pick (`pick` null when called off); `seq` grows with every one. */
@@ -45,6 +47,7 @@ export function initialBrowserState(): BrowserState {
     uiRequests: [],
     agentActions: {},
     agentSeq: 0,
+    agentTab: null,
     menus: {},
     picks: {},
     error: null,
@@ -88,7 +91,11 @@ export function reduceBrowser(state: BrowserState, update: BrowserUpdate): Brows
     case "browser.agent.action": {
       const seq = state.agentSeq + 1;
       const agentActions = { ...state.agentActions, [update.action.tab_id]: { action: update.action, seq } };
-      return { ...state, agentActions, agentSeq: seq };
+      return { ...state, agentActions, agentSeq: seq, agentTab: { tab_id: update.action.tab_id, seq } };
+    }
+    case "browser.agent.working": {
+      const seq = state.agentSeq + 1;
+      return { ...state, agentSeq: seq, agentTab: { tab_id: update.tab_id, seq } };
     }
     case "browser.ui.menu": {
       const seq = state.agentSeq + 1;

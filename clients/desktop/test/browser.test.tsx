@@ -10,7 +10,7 @@ import {
   ZwiimClientError,
 } from "@zwiim/sdk";
 import { HostProvider } from "@/lib/host-context";
-import { addressUrl, browserShortcut, fitFrame, fromPage, keyInput, modifiersOf, toPage } from "@/lib/browser-input";
+import { addressUrl, browserShortcut, fitFrame, fromPage, keyInput, modifiersOf, searchEngineOf, toPage } from "@/lib/browser-input";
 import { fileDragProps } from "@/lib/file-drag";
 import { BrowserPanel, GhostCursor } from "@/panels/BrowserPanel";
 import { DatePicker, FindBar, PageMenu, SelectPicker } from "@/panels/BrowserPageUi";
@@ -97,6 +97,17 @@ describe("browser input", () => {
     expect(addressUrl("localhost:5173/app")).toBe("http://localhost:5173/app");
     expect(addressUrl("127.0.0.1:3000")).toBe("http://127.0.0.1:3000");
     expect(addressUrl("example.com:8080")).toBe("https://example.com:8080");
+  });
+
+  it("searches for what is no address, with the chosen engine", () => {
+    expect(addressUrl("best pizza")).toBe("https://www.google.com/search?q=best%20pizza");
+    expect(addressUrl("pizza", "duckduckgo")).toBe("https://duckduckgo.com/?q=pizza");
+    expect(addressUrl("note: c++ & rust", "brave")).toBe("https://search.brave.com/search?q=note%3A%20c%2B%2B%20%26%20rust");
+    expect(addressUrl("example.com/a b")).toBe("https://www.google.com/search?q=example.com%2Fa%20b");
+    expect(addressUrl("intranet:8080/x")).toBe("https://intranet:8080/x");
+    expect(searchEngineOf("brave")).toBe("brave");
+    expect(searchEngineOf(null)).toBe("google");
+    expect(searchEngineOf("bing")).toBe("google");
   });
 });
 
@@ -259,6 +270,36 @@ describe("browser panel", () => {
     await tick();
     expect(t.calls.find((c) => c.op === "browser.tab.open")!.params).toEqual({ owner: { kind: "session", session_id: "s1" } });
     expect(screen.getAllByRole("tab").map((b) => b.textContent)).toContain("New tab");
+  });
+
+  it("follows the agent to the tab it opens and the tab it acts on", async () => {
+    const t = new StreamingTransport();
+    t.handlers["browser.view.open"] = () => ({ stream_id: "st1" });
+    t.handlers["browser.view.close"] = () => ({});
+    await mount(t, [tab("a"), tab("b", { title: "Bee", position: 1 }), tab("p", { owner: { kind: "personal" }, title: "Mine" })]);
+    const selected = () => screen.getByRole("tab", { selected: true }).textContent;
+    const acts = (tab_id: string) =>
+      act(async () => t.frame({ type: "browser.agent.action", action: { tab_id, kind: "click", x: 1, y: 1 } } as never));
+    expect(selected()).toBe("Example");
+
+    await act(async () => t.frame({ type: "browser.tab.state", tab: tab("n", { title: "Opened", position: 2 }) } as never));
+    expect(selected()).toBe("Opened");
+    await acts("b");
+    expect(selected()).toBe("Bee");
+    // Reading or loading a page, not only acting on it.
+    await act(async () => t.frame({ type: "browser.agent.working", tab_id: "a" } as never));
+    expect(selected()).toBe("Example");
+    await acts("b");
+    expect(selected()).toBe("Bee");
+
+    // Not into another session's tab, and not away from the person's own.
+    await act(async () => t.frame({ type: "browser.tab.state", tab: tab("o", { owner: { kind: "session", session_id: "s2" } }) } as never));
+    await acts("o");
+    expect(selected()).toBe("Bee");
+    fireEvent.click(screen.getAllByRole("tab").find((b) => b.textContent === "Mine · Mine")!);
+    await acts("a");
+    await act(async () => t.frame({ type: "browser.tab.state", tab: tab("m", { title: "Later", position: 3 }) } as never));
+    expect(selected()).toBe("Mine · Mine");
   });
 
   it("goes to what the address bar says, and steps through history", async () => {
@@ -524,6 +565,43 @@ describe("browser panel", () => {
       });
     } finally {
       drag.onDragEnd();
+      delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+      delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    }
+  });
+
+  it("sends a frame's wheel events as one, their deltas summed", async () => {
+    const size = (v: number) => ({ configurable: true, get: () => v });
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", size(200));
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", size(200));
+    vi.stubGlobal("createImageBitmap", async () => ({ close() {} }));
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => frames.push(cb));
+    try {
+      const t = new StreamingTransport();
+      t.handlers["browser.view.open"] = () => ({ stream_id: "st1" });
+      t.handlers["browser.view.close"] = () => ({});
+      await mount(t, [tab("a")]);
+      await act(async () => {
+        t.streams[0]!.handlers.onFrame?.({
+          number: 1,
+          host_ms: 0,
+          css_width: 100,
+          css_height: 100,
+          scale: 1,
+          scroll_x: 0,
+          scroll_y: 0,
+          jpeg: new Uint8Array(),
+        } as never);
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      const page = screen.getByLabelText("Page: Example");
+      for (const dy of [10, 20, 30]) fireEvent.wheel(page, { clientX: 100, clientY: 50, deltaY: dy, deltaX: 1 });
+      const wheels = () => t.streams[0]!.sent.filter((i) => i.type === "mouse" && i.action === "wheel");
+      expect(wheels()).toEqual([]);
+      act(() => frames.splice(0).forEach((cb) => cb(0)));
+      expect(wheels()).toEqual([{ type: "mouse", action: "wheel", x: 50, y: 25, delta_x: 3, delta_y: 60, modifiers: 0 }]);
+    } finally {
       delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
       delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
     }

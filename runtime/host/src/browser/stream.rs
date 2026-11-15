@@ -390,6 +390,34 @@ impl Viewer {
 
     /// Deliver the viewer's `input` to its tab.
     pub async fn input(&self, input: &super::input::Input) -> Result<(), BrowserError> {
+        self.input_handle().input(input).await
+    }
+
+    /// What delivers this viewer's input, apart from its frames, so input
+    /// waiting on the page never holds a frame back.
+    pub fn input_handle(&self) -> ViewerInput {
+        ViewerInput {
+            hub: self.hub.clone(),
+            tab_id: self.tab_id.clone(),
+        }
+    }
+
+    /// `frame` reached this viewer; the first viewer to say so acks it.
+    pub fn sent(&self, frame: &Frame) {
+        let _ = self.sent.send(frame.number);
+    }
+}
+
+/// Delivers one viewer's input to its tab.
+#[derive(Clone)]
+pub struct ViewerInput {
+    hub: Arc<StreamHub>,
+    tab_id: String,
+}
+
+impl ViewerInput {
+    /// Deliver `input` to the tab.
+    pub async fn input(&self, input: &super::input::Input) -> Result<(), BrowserError> {
         if let Some(viewport) = input.viewport() {
             return self.hub.resize(&self.tab_id, viewport).await;
         }
@@ -414,11 +442,6 @@ impl Viewer {
         }
         let (cdp, session) = self.hub.browser.session(&self.tab_id).await?;
         super::input::dispatch(&cdp, &session, input).await
-    }
-
-    /// `frame` reached this viewer; the first viewer to say so acks it.
-    pub fn sent(&self, frame: &Frame) {
-        let _ = self.sent.send(frame.number);
     }
 }
 

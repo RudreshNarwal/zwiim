@@ -75,6 +75,17 @@ describe("reduceBrowser", () => {
     expect(tabAgentAction(s, "a")).toBeUndefined();
   });
 
+  it("keeps the tab the agent last worked in, by any tool", () => {
+    let s = initialBrowserState();
+    expect(s.agentTab).toBeNull();
+    s = reduceBrowser(s, { type: "browser.agent.working", tab_id: "a" });
+    expect(s.agentTab).toEqual({ tab_id: "a", seq: 1 });
+    s = reduceBrowser(s, { type: "browser.agent.action", action: { tab_id: "b", kind: "click", x: 1, y: 1 } });
+    expect(s.agentTab).toEqual({ tab_id: "b", seq: 2 });
+    s = reduceBrowser(s, { type: "browser.agent.working", tab_id: "b" });
+    expect(s.agentTab).toEqual({ tab_id: "b", seq: 3 });
+  });
+
   it("keeps each tab's latest context menu, a repeat as a new one", () => {
     let s = reduceBrowser(initialBrowserState(), {
       type: "browser.snapshot",

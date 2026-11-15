@@ -46,6 +46,7 @@ import {
   type BrowserUiAnswer,
   type BrowserUiRequest,
   type FileTreeNode,
+  type SearchEngine,
 } from "@zwiim/sdk";
 import { readBase64 } from "@/attachments/usePendingAttachments";
 import { Button } from "@/components/ui/button";
@@ -58,6 +59,7 @@ import {
   fromPage,
   keyInput,
   modifiersOf,
+  searchEngineOf,
   toPage,
   type BrowserShortcut,
   type Fit,
@@ -141,6 +143,28 @@ export function BrowserPanel({
     void controller.cancelBrowserPick(picking.tabId).catch(() => {});
     setPicking(null);
   }, [picking, tabId, active, controller]);
+  // The panel follows the session's agent to a tab that appears and to the
+  // tab it works in, unless the person is on a tab of their own, picking an
+  // element or typing an address.
+  const known = useRef<Set<string> | null>(null);
+  const followed = useRef(browser.agentTab?.seq ?? 0);
+  const follows = () => tab?.owner.kind !== "personal" && !picking && document.activeElement !== address.current;
+  useEffect(() => {
+    if (browser.status !== "live") {
+      known.current = null;
+      return;
+    }
+    const ids = tabs.filter((t) => t.owner.kind === "session").map((t) => t.tab_id);
+    const fresh = known.current ? ids.filter((id) => !known.current!.has(id)) : [];
+    known.current = new Set(ids);
+    if (fresh.length > 0 && follows()) setSelected(fresh.at(-1)!);
+  });
+  useEffect(() => {
+    const working = browser.agentTab;
+    if (!working || working.seq <= followed.current) return;
+    followed.current = working.seq;
+    if (tabs.some((t) => t.tab_id === working.tab_id && t.owner.kind === "session") && follows()) setSelected(working.tab_id);
+  });
   const find = useCallback(
     (query: string, backwards: boolean) =>
       tabId ? controller.findInBrowserTab(tabId, query, backwards).catch(() => null) : Promise.resolve(null),
@@ -806,14 +830,25 @@ function AddressBar({
   onReloadOnSave: (() => void) | null;
   onPreview(preview: BrowserPreviewId | null): void;
 }) {
+  const controller = useController();
   // What the person is typing; the tab's own URL whenever they are not.
   const [draft, setDraft] = useState<string | null>(null);
+  // The Host's search engine, read again each time the bar is focused so a
+  // change in Settings applies to the next search.
+  const [engine, setEngine] = useState<SearchEngine>("google");
+  const readEngine = useCallback(() => {
+    controller.client.request("settings.get", {}).then(
+      (s) => setEngine(searchEngineOf(s.values["browser.search_engine"])),
+      () => {},
+    );
+  }, [controller]);
+  useEffect(readEngine, [readEngine]);
   return (
     <form
       className="flex h-9 shrink-0 items-center gap-1 border-b px-2"
       onSubmit={(e) => {
         e.preventDefault();
-        const url = addressUrl(draft ?? tab.url);
+        const url = addressUrl(draft ?? tab.url, engine);
         if (!url) return;
         setDraft(null);
         inputRef.current?.blur();
@@ -845,7 +880,10 @@ function AddressBar({
         value={draft ?? (tab.url === "about:blank" ? "" : tab.url)}
         placeholder="Search or enter an address"
         onChange={(e) => setDraft(e.target.value)}
-        onFocus={(e) => e.target.select()}
+        onFocus={(e) => {
+          e.target.select();
+          readEngine();
+        }}
         onKeyDown={(e) => {
           if (e.key !== "Escape") return;
           setDraft(null);
@@ -1061,12 +1099,17 @@ export function BrowserView({
     };
   }, [controller, tab.tab_id, attempt]);
 
-  // Moves are sent at most once per animation frame (design 7.6).
+  // Moves are sent at most once per animation frame (design 7.6), and so is
+  // scrolling: a trackpad's many wheel events in a frame go as one, their
+  // deltas summed, so the page does not fall behind them.
   const move = useRef<{ x: number; y: number; buttons: number; modifiers: number } | null>(null);
   const moveFrame = useRef<number | null>(null);
+  const wheel = useRef<{ x: number; y: number; delta_x: number; delta_y: number; modifiers: number } | null>(null);
+  const wheelFrame = useRef<number | null>(null);
   useEffect(
     () => () => {
       if (moveFrame.current !== null) cancelAnimationFrame(moveFrame.current);
+      if (wheelFrame.current !== null) cancelAnimationFrame(wheelFrame.current);
     },
     [],
   );
@@ -1163,7 +1206,20 @@ export function BrowserView({
           if (!p) return;
           // Lines and pages as pixels, as Chromium counts them.
           const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? page.current.height : 1;
-          send({ type: "mouse", action: "wheel", ...p, delta_x: e.deltaX * unit, delta_y: e.deltaY * unit, modifiers: modifiersOf(e) });
+          const was = wheel.current;
+          wheel.current = {
+            ...p,
+            delta_x: (was?.delta_x ?? 0) + e.deltaX * unit,
+            delta_y: (was?.delta_y ?? 0) + e.deltaY * unit,
+            modifiers: modifiersOf(e),
+          };
+          if (wheelFrame.current !== null) return;
+          wheelFrame.current = requestAnimationFrame(() => {
+            wheelFrame.current = null;
+            const w = wheel.current;
+            wheel.current = null;
+            if (w) send({ type: "mouse", action: "wheel", ...w });
+          });
         }}
         onKeyDown={(e) => {
           const s = browserShortcut(e);

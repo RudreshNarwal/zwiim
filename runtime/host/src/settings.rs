@@ -47,6 +47,8 @@ enum Kind {
     TimelineMb,
     /// Days a browser recording is kept (see [`TIMELINE_DAYS_RANGE`]).
     TimelineDays,
+    /// Where the browser's address bar sends a search: one of [`SEARCH_ENGINES`].
+    SearchEngine,
 }
 
 pub const DEFAULT_AGENT: &str = "defaults.agent";
@@ -64,6 +66,7 @@ pub const BROWSER_OPEN_DEV_SERVERS: &str = "browser.open_dev_servers";
 pub const BROWSER_SESSION_TABS: &str = "browser.session_tabs";
 pub const BROWSER_TIMELINE_MB: &str = "browser.timeline_mb";
 pub const BROWSER_TIMELINE_DAYS: &str = "browser.timeline_days";
+pub const BROWSER_SEARCH_ENGINE: &str = "browser.search_engine";
 
 /// Every setting the Host keeps.
 const KEYS: &[(&str, Kind)] = &[
@@ -86,7 +89,11 @@ const KEYS: &[(&str, Kind)] = &[
     (BROWSER_AGENT_PASSWORDS, Kind::Bool),
     (BROWSER_AGENT_ASK_SITES, Kind::Bool),
     (BROWSER_OPEN_DEV_SERVERS, Kind::Bool),
+    (BROWSER_SEARCH_ENGINE, Kind::SearchEngine),
 ];
+
+/// The search engines the browser's address bar offers; unset is Google.
+pub const SEARCH_ENGINES: &[&str] = &["google", "duckduckgo", "brave"];
 
 /// The terminal output a setting can keep, in bytes.
 pub const SCROLLBACK_RANGE: std::ops::RangeInclusive<u64> = 64 * 1024..=16 * 1024 * 1024;
@@ -182,6 +189,7 @@ fn check(key: &str, value: &Value) -> Result<(), ZwiimError> {
         (Kind::TimelineDays, value) => value
             .as_u64()
             .is_some_and(|n| TIMELINE_DAYS_RANGE.contains(&n)),
+        (Kind::SearchEngine, Value::String(s)) => SEARCH_ENGINES.contains(&s.as_str()),
         _ => false,
     };
     if valid {
@@ -557,6 +565,10 @@ mod tests {
         assert!(check("browser.timeline_mb", &Value::from(1001)).is_err());
         assert!(check("browser.timeline_days", &Value::from(7)).is_ok());
         assert!(check("browser.timeline_days", &Value::from(91)).is_err());
+        assert!(check("browser.search_engine", &Value::from("duckduckgo")).is_ok());
+        assert!(check("browser.search_engine", &Value::from("brave")).is_ok());
+        assert!(check("browser.search_engine", &Value::from("bing")).is_err());
+        assert!(check("browser.search_engine", &Value::from(true)).is_err());
         assert!(check("git.push_sets_upstream", &Value::from(false)).is_ok());
     }
 

@@ -88,6 +88,9 @@ pub enum BrowserEvent {
     UiDone { request_id: String, tab_id: String },
     /// An agent is about to act on a tab (design 10.2).
     AgentAction(AgentAction),
+    /// An agent's browser tool is using a tab: reading, capturing, loading
+    /// or acting on it.
+    AgentWorking { tab_id: String },
     /// A page's context menu was asked for (design 9).
     Menu(PageMenu),
     /// A tab's page began a download, under the page's file name.
@@ -2153,14 +2156,20 @@ impl BrowserService {
         usage.active_at = now;
     }
 
-    /// An agent used tab `tab_id` through its browser tools.
+    /// An agent used tab `tab_id` through its browser tools; clients are
+    /// told, to show the tab it works in.
     pub fn agent_used(&self, tab_id: &str) {
-        let mut usage = self.usage_mut();
-        let now = tokio::time::Instant::now();
-        usage.agent_at.insert(tab_id.to_string(), now);
-        usage.last_used.insert(tab_id.to_string(), now);
-        usage.shown.remove(tab_id);
-        usage.active_at = now;
+        {
+            let mut usage = self.usage_mut();
+            let now = tokio::time::Instant::now();
+            usage.agent_at.insert(tab_id.to_string(), now);
+            usage.last_used.insert(tab_id.to_string(), now);
+            usage.shown.remove(tab_id);
+            usage.active_at = now;
+        }
+        self.emit(BrowserEvent::AgentWorking {
+            tab_id: tab_id.to_string(),
+        });
     }
 
     /// Whether `owner` may open another tab: within the tab caps, a session

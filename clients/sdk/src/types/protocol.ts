@@ -468,6 +468,8 @@ export type BrowserFrame =
   | { type: "browser.ui.done"; request_id: string; tab_id: string }
   /** Sent just before the agent acts. */
   | { type: "browser.agent.action"; action: BrowserAgentAction }
+  /** The agent's browser tools are using this tab: reading, capturing, loading or acting on it (revision 35). */
+  | { type: "browser.agent.working"; tab_id: string }
   | { type: "browser.ui.menu"; menu: BrowserMenu }
   /** A pick ended: the element, or `null` when it was called off, the page went, or nobody picked. */
   | { type: "browser.tab.picked"; tab_id: string; owner: BrowserTabOwner; pick: BrowserPick | null }
@@ -1006,7 +1008,9 @@ export interface AgentDefaults {
  * `SESSION_TABS_RANGE`; unset keeps `DEFAULT_SESSION_TABS`), and
  * `browser.timeline_mb` and `browser.timeline_days`, how much of each
  * session's browser recording the Host keeps (within `TIMELINE_MB_RANGE`
- * and `TIMELINE_DAYS_RANGE`; unset keeps the defaults). Null when unset.
+ * and `TIMELINE_DAYS_RANGE`; unset keeps the defaults), and from revision 36
+ * `browser.search_engine`, where the address bar sends a search (one of
+ * `SEARCH_ENGINES`; unset is Google). Null when unset.
  */
 export type HostSettingKey =
   | "defaults.agent"
@@ -1027,7 +1031,8 @@ export type HostSettingKey =
   | "browser.open_dev_servers"
   | "browser.session_tabs"
   | "browser.timeline_mb"
-  | "browser.timeline_days";
+  | "browser.timeline_days"
+  | "browser.search_engine";
 
 /** Longest `prompts.*` setting the Host accepts, in UTF-8 bytes. */
 export const MAX_PROMPT_BYTES = 8000;
@@ -1049,6 +1054,10 @@ export const TIMELINE_MB_RANGE = { min: 1, max: 1000 } as const;
 export const DEFAULT_TIMELINE_MB = 50;
 export const TIMELINE_DAYS_RANGE = { min: 1, max: 90 } as const;
 export const DEFAULT_TIMELINE_DAYS = 7;
+
+/** What `browser.search_engine` can be, unset being `google` (revision 36). */
+export const SEARCH_ENGINES = ["google", "duckduckgo", "brave"] as const;
+export type SearchEngine = (typeof SEARCH_ENGINES)[number];
 
 /** `host.folders`: where the Host keeps its data, worktrees and clones (revision 20). */
 export interface HostFolders {

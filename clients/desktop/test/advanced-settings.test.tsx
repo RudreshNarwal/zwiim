@@ -226,6 +226,30 @@ describe("terminal scrollback", () => {
     c.dispose();
   });
 
+  it("searches with Google unless another engine is chosen", async () => {
+    const t = host({ "browser.search_engine": null });
+    const c = await mount(t);
+    const dialog = openSettings("Browser");
+    await tick();
+    const engine = dialog.getByLabelText("Search engine") as HTMLSelectElement;
+    expect(engine.value).toBe("");
+    expect([...engine.options].map((o) => o.text)).toEqual(["Google (default)", "DuckDuckGo", "Brave Search"]);
+    fireEvent.change(engine, { target: { value: "brave" } });
+    await tick();
+    fireEvent.change(dialog.getByLabelText("Search engine"), { target: { value: "" } });
+    await tick();
+    expect(updates(t)).toEqual([{ "browser.search_engine": "brave" }, { "browser.search_engine": null }]);
+    c.dispose();
+  });
+
+  it("offers no search engine on an older host", async () => {
+    const c = await mount(host());
+    const dialog = openSettings("Browser");
+    await tick();
+    expect(dialog.queryByLabelText("Search engine")).toBeNull();
+    c.dispose();
+  });
+
   it("holds 20 tabs per session unless another count is chosen", async () => {
     const t = host();
     const c = await mount(t);

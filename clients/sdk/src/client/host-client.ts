@@ -591,6 +591,7 @@ export class HostClient {
       case "browser.ui.request":
       case "browser.ui.done":
       case "browser.agent.action":
+      case "browser.agent.working":
       case "browser.ui.menu":
       case "browser.tab.picked":
       case "browser.error":
