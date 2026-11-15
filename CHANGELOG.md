@@ -9,21 +9,62 @@ have their own versions and are listed under Compatibility.
 ## [Unreleased]
 
 ### Added
-- OpenCode is a supported agent beside Claude Code and Codex. The Host installs it, its free OpenCode Zen models work with no key, and keys for other providers (one per provider) are kept in the Keychain from Settings → Agents.
+- None.
 
 ### Changed
 - None.
 
 ### Fixed
+- None.
+
+### Security
+- None.
+
+### Compatibility
+- None.
+
+### Provider changes
+- None.
+
+### Migration notes
+- None.
+
+### Known limitations
+- None.
+
+## [0.2.1] - 2026-11-15
+
+### Added
+- OpenCode is a supported agent beside Claude Code and Codex. The Host installs it, its free OpenCode Zen models work with no key, and keys for other providers (one per provider) are kept in the Keychain from Settings → Agents.
+- Search from the desktop browser's address bar: what you type that is not
+  an address is searched, with Google, DuckDuckGo or Brave Search, chosen in
+  Settings > Browser (Google by default).
+
+### Changed
+- The desktop browser follows the agent: it switches to the tab the
+  agent opens or works in, unless you are on one of your own tabs, picking
+  an element or typing an address.
+
+### Fixed
 - A worktree's diff shows only what its base branch doesn't have yet: a
   branch started from a newer base no longer lists changes already merged,
   and the diff empties once its pull request merges.
+- An agent opening the dev server the Host already showed in its chat's tab
+  takes that tab instead of opening a second one on the same page.
+- Scrolling in the desktop browser keeps up: a trackpad's scroll events are
+  sent as one per frame, and a page busy with input no longer holds back
+  what the browser view shows.
 
 ### Security
 - OpenCode starts with external plugins off: neither your own nor a workspace's `opencode.json` / `.opencode/plugin/` plugins load, since OpenCode would fetch and run them unverified. Zwiim no longer installs OpenCode plugins or writes its `auth.json`.
 
 ### Compatibility
 - Protocol revision 34: `agent.save_key` / `agent.remove_key` take `provider` for OpenCode, whose status may read `free` and lists `saved_providers`. Older clients ignore the new fields.
+- Protocol revision 35: `browser.subscribe` sends `browser.agent.working
+  {tab_id}` whenever an agent's browser tool uses a tab. Older clients
+  ignore it.
+- Protocol revision 36: `settings` gains `browser.search_engine` (`google`,
+  `duckduckgo` or `brave`; unset is Google). Older clients never see it.
 
 ### Provider changes
 - OpenCode 1.19.5 (macOS arm64/x64, Linux x64/arm64 with glibc), installed from npm's signed per-platform packages.
