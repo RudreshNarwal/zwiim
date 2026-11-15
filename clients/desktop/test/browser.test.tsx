@@ -10,7 +10,7 @@ import {
   ZwiimClientError,
 } from "@zwiim/sdk";
 import { HostProvider } from "@/lib/host-context";
-import { addressUrl, browserShortcut, fitFrame, fromPage, keyInput, modifiersOf, toPage } from "@/lib/browser-input";
+import { addressUrl, browserShortcut, fitFrame, fromPage, keyInput, modifiersOf, searchEngineOf, toPage } from "@/lib/browser-input";
 import { fileDragProps } from "@/lib/file-drag";
 import { BrowserPanel, GhostCursor } from "@/panels/BrowserPanel";
 import { DatePicker, FindBar, PageMenu, SelectPicker } from "@/panels/BrowserPageUi";
@@ -97,6 +97,17 @@ describe("browser input", () => {
     expect(addressUrl("localhost:5173/app")).toBe("http://localhost:5173/app");
     expect(addressUrl("127.0.0.1:3000")).toBe("http://127.0.0.1:3000");
     expect(addressUrl("example.com:8080")).toBe("https://example.com:8080");
+  });
+
+  it("searches for what is no address, with the chosen engine", () => {
+    expect(addressUrl("best pizza")).toBe("https://www.google.com/search?q=best%20pizza");
+    expect(addressUrl("pizza", "duckduckgo")).toBe("https://duckduckgo.com/?q=pizza");
+    expect(addressUrl("note: c++ & rust", "brave")).toBe("https://search.brave.com/search?q=note%3A%20c%2B%2B%20%26%20rust");
+    expect(addressUrl("example.com/a b")).toBe("https://www.google.com/search?q=example.com%2Fa%20b");
+    expect(addressUrl("intranet:8080/x")).toBe("https://intranet:8080/x");
+    expect(searchEngineOf("brave")).toBe("brave");
+    expect(searchEngineOf(null)).toBe("google");
+    expect(searchEngineOf("bing")).toBe("google");
   });
 });
 

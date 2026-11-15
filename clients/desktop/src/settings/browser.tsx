@@ -1,7 +1,8 @@
 // The Browser tab: how the host's browser treats agents and sessions. Where it
 // saves downloads, how many tabs a session may hold (its pages' own windows
 // included), whether agents may type passwords anywhere or must ask before a
-// new site, and whether dev servers open in the session's tab.
+// new site, whether dev servers open in the session's tab, and where the
+// address bar searches.
 
 import { useCallback, useEffect, useState } from "react";
 import { DEFAULT_SESSION_TABS, DEFAULT_TIMELINE_DAYS, DEFAULT_TIMELINE_MB, type HostSettings } from "@zwiim/sdk";
@@ -15,6 +16,12 @@ type Values = HostSettings["values"];
 
 /** The select's value for the host's default; the host keeps it as unset. */
 const DEFAULT = "";
+
+/** The address bar's search engines, Google being the default. */
+const ENGINES = [
+  { value: "duckduckgo", label: "DuckDuckGo" },
+  { value: "brave", label: "Brave Search" },
+];
 
 /** The tab counts offered, beside the default. */
 const TAB_COUNTS = [5, 10, 30];
@@ -70,6 +77,24 @@ export function BrowserSettings({ bridge, remote }: { bridge: NativeBridge; remo
       <p className="text-muted-foreground">
         The browser runs on the host, for every device. Agents use it through their browser tools.
       </p>
+      {/* An older host does not know the setting and leaves it out. */}
+      {"browser.search_engine" in values && (
+        <SettingRow
+          setting={{
+            id: "browser-search-engine",
+            title: "Search engine",
+            description: "Where the address bar searches when what you type is not an address.",
+          }}
+        >
+          <ControlSelect
+            label="Search engine"
+            value={typeof values["browser.search_engine"] === "string" ? values["browser.search_engine"] : DEFAULT}
+            disabled={!online}
+            onChange={(v) => update({ "browser.search_engine": v === DEFAULT ? null : v })}
+            options={[{ value: DEFAULT, label: "Google (default)" }, ...ENGINES]}
+          />
+        </SettingRow>
+      )}
       <SettingRow
         setting={{
           id: "browser-session-tabs",

@@ -502,7 +502,9 @@ One controller per tab at a time, held by the Host:
 3. Zoom: `Emulation.setPageScaleFactor` per tab.
 4. History: the address bar suggests from `browser_tabs` URLs and the
    person's own navigation history in the personal profile. No bookmarks in
-   this design.
+   this design. What is no address (it has a space, or neither a dot nor a
+   port) is searched with the `browser.search_engine` setting: Google
+   (unset), DuckDuckGo or Brave Search, chosen in Settings > Browser.
 5. Mobile preview: `browser.tab.preview {tab_id, preview}` shows a tab as
    an iPhone, an Android phone or an iPad shows it (`preview.rs`): the
    device's screen and pixel ratio through `Emulation.setDeviceMetricsOverride`

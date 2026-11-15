@@ -46,6 +46,7 @@ import {
   type BrowserUiAnswer,
   type BrowserUiRequest,
   type FileTreeNode,
+  type SearchEngine,
 } from "@zwiim/sdk";
 import { readBase64 } from "@/attachments/usePendingAttachments";
 import { Button } from "@/components/ui/button";
@@ -58,6 +59,7 @@ import {
   fromPage,
   keyInput,
   modifiersOf,
+  searchEngineOf,
   toPage,
   type BrowserShortcut,
   type Fit,
@@ -828,14 +830,25 @@ function AddressBar({
   onReloadOnSave: (() => void) | null;
   onPreview(preview: BrowserPreviewId | null): void;
 }) {
+  const controller = useController();
   // What the person is typing; the tab's own URL whenever they are not.
   const [draft, setDraft] = useState<string | null>(null);
+  // The Host's search engine, read again each time the bar is focused so a
+  // change in Settings applies to the next search.
+  const [engine, setEngine] = useState<SearchEngine>("google");
+  const readEngine = useCallback(() => {
+    controller.client.request("settings.get", {}).then(
+      (s) => setEngine(searchEngineOf(s.values["browser.search_engine"])),
+      () => {},
+    );
+  }, [controller]);
+  useEffect(readEngine, [readEngine]);
   return (
     <form
       className="flex h-9 shrink-0 items-center gap-1 border-b px-2"
       onSubmit={(e) => {
         e.preventDefault();
-        const url = addressUrl(draft ?? tab.url);
+        const url = addressUrl(draft ?? tab.url, engine);
         if (!url) return;
         setDraft(null);
         inputRef.current?.blur();
@@ -867,7 +880,10 @@ function AddressBar({
         value={draft ?? (tab.url === "about:blank" ? "" : tab.url)}
         placeholder="Search or enter an address"
         onChange={(e) => setDraft(e.target.value)}
-        onFocus={(e) => e.target.select()}
+        onFocus={(e) => {
+          e.target.select();
+          readEngine();
+        }}
         onKeyDown={(e) => {
           if (e.key !== "Escape") return;
           setDraft(null);

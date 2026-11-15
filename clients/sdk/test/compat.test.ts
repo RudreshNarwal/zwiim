@@ -103,8 +103,8 @@ describe("evaluateCompatibility", () => {
     expect(CLIENT_CAPABILITIES).toContain("repository.settings_import");
   });
 
-  it("speaks revision 35 (the agent's browser tab)", () => {
-    expect(CLIENT_REVISION).toBe(35);
+  it("speaks revision 36 (search engines)", () => {
+    expect(CLIENT_REVISION).toBe(36);
   });
 
   it("speaks revision 33 and uses the Host browser", () => {

@@ -484,7 +484,11 @@ use serde::{Deserialize, Serialize};
 /// tabs through its browser tools (reading, capturing, loading or acting on
 /// it), `browser.subscribe` sends `browser.agent.working {tab_id}`, so a
 /// client can show the tab the agent works in. Older clients ignore it.
-pub const PROTOCOL_REVISION: u32 = 35;
+///
+/// 36 (`browser.search_engine`): `settings` gains `browser.search_engine`,
+/// where the browser's address bar sends a search: `google`, `duckduckgo` or
+/// `brave` (unset is Google). Older clients never see or set it.
+pub const PROTOCOL_REVISION: u32 = 36;
 
 /// Oldest client revision this Host serves. Raise only after a release that
 /// reported `client_deprecated`-era clients (see the R9 design, §5.5).
@@ -718,7 +722,12 @@ mod tests {
 
     #[test]
     fn the_agents_tab_is_told_from_revision_35() {
-        assert_eq!(PROTOCOL_REVISION, 35);
+        const _: () = assert!(PROTOCOL_REVISION >= 35);
+    }
+
+    #[test]
+    fn search_engines_are_revision_36() {
+        assert_eq!(PROTOCOL_REVISION, 36);
     }
 
     #[test]
