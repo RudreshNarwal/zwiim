@@ -244,9 +244,17 @@ pub(crate) async fn tab_op(
             if let Err(e) = super::service::check_url(&url) {
                 return BrowserTabOutcome::refused(None, ERROR_BAD_ADDRESS, e.message);
             }
-            match browser.open(owner(session), None).await {
-                Ok(tab) => (tab.id, url),
-                Err(e) => return BrowserTabOutcome::refused(None, ERROR_OPEN_FAILED, e.message),
+            // The Host may already show this dev server in a tab of the session.
+            if let Some(tab_id) = browser.dev_server_tab(session, &url).await {
+                browser.agent_used(&tab_id);
+                (tab_id, url)
+            } else {
+                match browser.open(owner(session), None).await {
+                    Ok(tab) => (tab.id, url),
+                    Err(e) => {
+                        return BrowserTabOutcome::refused(None, ERROR_OPEN_FAILED, e.message)
+                    }
+                }
             }
         }
         BrowserTabOp::Navigate { tab_id, url } => {
@@ -1538,6 +1546,38 @@ mod tests {
             }),
             "Typed into a field"
         );
+    }
+
+    /// The agent opening the dev server the Host already showed takes that
+    /// tab; once the agent has it, another open is a second tab.
+    #[tokio::test]
+    async fn an_agent_takes_the_tab_shown_for_its_dev_server() {
+        let fake = FakeEngine::default();
+        let browser = browser(&fake).await;
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = server.local_addr().unwrap().port();
+        browser.show_dev_server("s1", port).await;
+        let shown = list(&browser, "s1").await.tabs[0].tab_id.clone();
+
+        let worlds = Worlds::default();
+        let open = || {
+            tab_op(
+                &browser,
+                &worlds,
+                "s1",
+                BrowserTabOp::Open {
+                    url: format!("http://127.0.0.1:{port}/"),
+                },
+            )
+        };
+        let opened = open().await;
+        assert_eq!(opened.error, None, "{:?}", opened.note);
+        assert_eq!(opened.tab.unwrap().tab_id, shown);
+        assert_eq!(list(&browser, "s1").await.tabs.len(), 1);
+
+        let again = open().await.tab.unwrap();
+        assert_ne!(again.tab_id, shown);
+        assert_eq!(list(&browser, "s1").await.tabs.len(), 2);
     }
 
     #[tokio::test]
