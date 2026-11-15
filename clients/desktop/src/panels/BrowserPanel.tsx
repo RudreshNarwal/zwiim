@@ -1083,12 +1083,17 @@ export function BrowserView({
     };
   }, [controller, tab.tab_id, attempt]);
 
-  // Moves are sent at most once per animation frame (design 7.6).
+  // Moves are sent at most once per animation frame (design 7.6), and so is
+  // scrolling: a trackpad's many wheel events in a frame go as one, their
+  // deltas summed, so the page does not fall behind them.
   const move = useRef<{ x: number; y: number; buttons: number; modifiers: number } | null>(null);
   const moveFrame = useRef<number | null>(null);
+  const wheel = useRef<{ x: number; y: number; delta_x: number; delta_y: number; modifiers: number } | null>(null);
+  const wheelFrame = useRef<number | null>(null);
   useEffect(
     () => () => {
       if (moveFrame.current !== null) cancelAnimationFrame(moveFrame.current);
+      if (wheelFrame.current !== null) cancelAnimationFrame(wheelFrame.current);
     },
     [],
   );
@@ -1185,7 +1190,20 @@ export function BrowserView({
           if (!p) return;
           // Lines and pages as pixels, as Chromium counts them.
           const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? page.current.height : 1;
-          send({ type: "mouse", action: "wheel", ...p, delta_x: e.deltaX * unit, delta_y: e.deltaY * unit, modifiers: modifiersOf(e) });
+          const was = wheel.current;
+          wheel.current = {
+            ...p,
+            delta_x: (was?.delta_x ?? 0) + e.deltaX * unit,
+            delta_y: (was?.delta_y ?? 0) + e.deltaY * unit,
+            modifiers: modifiersOf(e),
+          };
+          if (wheelFrame.current !== null) return;
+          wheelFrame.current = requestAnimationFrame(() => {
+            wheelFrame.current = null;
+            const w = wheel.current;
+            wheel.current = null;
+            if (w) send({ type: "mouse", action: "wheel", ...w });
+          });
         }}
         onKeyDown={(e) => {
           const s = browserShortcut(e);

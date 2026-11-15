@@ -559,6 +559,43 @@ describe("browser panel", () => {
     }
   });
 
+  it("sends a frame's wheel events as one, their deltas summed", async () => {
+    const size = (v: number) => ({ configurable: true, get: () => v });
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", size(200));
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", size(200));
+    vi.stubGlobal("createImageBitmap", async () => ({ close() {} }));
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => frames.push(cb));
+    try {
+      const t = new StreamingTransport();
+      t.handlers["browser.view.open"] = () => ({ stream_id: "st1" });
+      t.handlers["browser.view.close"] = () => ({});
+      await mount(t, [tab("a")]);
+      await act(async () => {
+        t.streams[0]!.handlers.onFrame?.({
+          number: 1,
+          host_ms: 0,
+          css_width: 100,
+          css_height: 100,
+          scale: 1,
+          scroll_x: 0,
+          scroll_y: 0,
+          jpeg: new Uint8Array(),
+        } as never);
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      const page = screen.getByLabelText("Page: Example");
+      for (const dy of [10, 20, 30]) fireEvent.wheel(page, { clientX: 100, clientY: 50, deltaY: dy, deltaX: 1 });
+      const wheels = () => t.streams[0]!.sent.filter((i) => i.type === "mouse" && i.action === "wheel");
+      expect(wheels()).toEqual([]);
+      act(() => frames.splice(0).forEach((cb) => cb(0)));
+      expect(wheels()).toEqual([{ type: "mouse", action: "wheel", x: 50, y: 25, delta_x: 3, delta_y: 60, modifiers: 0 }]);
+    } finally {
+      delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+      delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    }
+  });
+
   it("draws a select's list over the page, not as a sheet", async () => {
     const t = new StreamingTransport();
     t.handlers["browser.view.open"] = () => ({ stream_id: "st1" });
