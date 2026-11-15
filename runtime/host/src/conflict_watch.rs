@@ -12,7 +12,8 @@
 //! more. Results go back to the feed, which publishes only real changes.
 //!
 //! Base fetches are rate-limited per root workspace and base to one every
-//! [`ConflictPolicy::fetch_interval`]. A fetch that fails (offline, remote
+//! [`ConflictPolicy::fetch_interval`]; a merged pull request
+//! ([`ConflictCmd::FetchNow`]) fetches regardless. A fetch that fails (offline, remote
 //! gone) is ignored: the check runs on the local refs and the last state
 //! stands until a check says otherwise.
 
@@ -66,6 +67,18 @@ pub(crate) enum ConflictCmd {
     Check(String),
     /// An agent turn ended in the workspace: fetch its base, then check.
     Fetch(String),
+    /// The workspace's pull request merged: fetch its base now, past the
+    /// rate limit, then check.
+    FetchNow(String),
+}
+
+/// Whether an owed check fetches the base first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Fetch {
+    No,
+    /// Within the rate limit.
+    Due,
+    Now,
 }
 
 /// A check's answer for the feed to publish.
@@ -123,16 +136,19 @@ struct Env {
 }
 
 impl Env {
-    /// Whether `root_id` may fetch `base` now; a yes counts as the attempt,
-    /// whether or not the fetch then succeeds.
-    fn may_fetch(&self, root_id: &str, base: &str) -> bool {
+    /// Whether `root_id` may fetch `base` as `fetch` asks; a yes counts as
+    /// the attempt, whether or not the fetch then succeeds.
+    fn may_fetch(&self, root_id: &str, base: &str, fetch: Fetch) -> bool {
+        if fetch == Fetch::No {
+            return false;
+        }
         let mut last = self.last_fetch.lock().unwrap_or_else(|e| e.into_inner());
         let key = (root_id.to_string(), base.to_string());
         let now = Instant::now();
-        if last
+        let recent = last
             .get(&key)
-            .is_some_and(|at| now.duration_since(*at) < self.fetch_interval)
-        {
+            .is_some_and(|at| now.duration_since(*at) < self.fetch_interval);
+        if fetch == Fetch::Due && recent {
             return false;
         }
         last.insert(key, now);
@@ -145,8 +161,7 @@ struct Tracked {
     generation: u64,
     /// A check is owed.
     queued: bool,
-    /// The owed check fetches the base first.
-    fetch: bool,
+    fetch: Fetch,
     running: bool,
 }
 
@@ -192,7 +207,7 @@ impl Watcher {
                             target: target.clone(),
                             generation: self.generations,
                             queued: true,
-                            fetch: false,
+                            fetch: Fetch::No,
                             running: false,
                         }
                     });
@@ -200,15 +215,16 @@ impl Watcher {
                 }
                 self.tracked = next;
             }
-            ConflictCmd::Check(id) => self.trigger(&id, false),
-            ConflictCmd::Fetch(id) => self.trigger(&id, true),
+            ConflictCmd::Check(id) => self.trigger(&id, Fetch::No),
+            ConflictCmd::Fetch(id) => self.trigger(&id, Fetch::Due),
+            ConflictCmd::FetchNow(id) => self.trigger(&id, Fetch::Now),
         }
     }
 
-    fn trigger(&mut self, id: &str, fetch: bool) {
+    fn trigger(&mut self, id: &str, fetch: Fetch) {
         if let Some(t) = self.tracked.get_mut(id) {
             t.queued = true;
-            t.fetch |= fetch;
+            t.fetch = t.fetch.max(fetch);
         }
     }
 
@@ -224,7 +240,7 @@ impl Watcher {
             t.running = true;
             t.queued = false;
             running += 1;
-            let fetch = std::mem::take(&mut t.fetch);
+            let fetch = std::mem::replace(&mut t.fetch, Fetch::No);
             let env = self.env.clone();
             let target = t.target.clone();
             let generation = t.generation;
@@ -269,7 +285,7 @@ impl Watcher {
 async fn check(
     env: &Env,
     target: &ConflictTarget,
-    fetch: bool,
+    fetch: Fetch,
 ) -> Result<Option<ConflictCheck>, GitError> {
     let root = Path::new(&target.path);
     let Some(base) =
@@ -277,7 +293,7 @@ async fn check(
     else {
         return Ok(None);
     };
-    if fetch && env.may_fetch(&target.root_id, &base) {
+    if env.may_fetch(&target.root_id, &base, fetch) {
         let host = GitHost::new(&env.db, &env.data_dir);
         if let Err(e) = git_harness::fetch_base(&host, root, &base).await {
             tracing::debug!("[ConflictWatch] fetch of {base} failed: {}", e.message);
@@ -432,6 +448,9 @@ mod tests {
         r.cmd.send(ConflictCmd::Fetch("ws-root".into())).ok().unwrap();
         r.result().await;
         assert_eq!(r.fetch_count(), 1, "two turn ends within the interval fetch once");
+        r.cmd.send(ConflictCmd::FetchNow("ws-root".into())).ok().unwrap();
+        r.result().await;
+        assert_eq!(r.fetch_count(), 2, "a merge fetches within the interval");
 
         let mut r = rig(
             ConflictPolicy {

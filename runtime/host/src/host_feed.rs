@@ -515,9 +515,10 @@ fn resolving_changed(workspace_id: &str, session_id: Option<&str>) -> (&'static 
     )
 }
 
-fn is_merged(entry: Option<&PrEntry>) -> bool {
+fn is_merged(entry: &PrEntry) -> bool {
     entry
-        .and_then(|e| e.pr.as_ref())
+        .pr
+        .as_ref()
         .is_some_and(|pr| pr.state == PrLifecycle::Merged)
 }
 
@@ -963,11 +964,11 @@ impl FeedTask {
         if known.cloned().unwrap_or_default() == result.entry {
             return;
         }
-        // Its base branch now has the merge: fetch it so the diff empties.
-        if is_merged(Some(&result.entry)) && !is_merged(known) {
+        // The pull request just merged: fetch the base so the diff empties.
+        if is_merged(&result.entry) && !known.is_some_and(is_merged) {
             let _ = self
                 .conflict_cmd
-                .send(ConflictCmd::Fetch(result.workspace_id.clone()));
+                .send(ConflictCmd::FetchNow(result.workspace_id.clone()));
         }
         if result.entry.is_empty() {
             self.projection.prs.remove(&result.workspace_id);
@@ -2501,17 +2502,15 @@ esac
         git(wt_path, &["add", "feature.txt"]);
         git(wt_path, &["commit", "-q", "-m", "feature"]);
         git(wt_path, &["push", "-q", "origin", &branch]);
-        let head = String::from_utf8(
-            std::process::Command::new("git")
-                .args(["rev-parse", "HEAD"])
-                .current_dir(wt_path)
+        let rev = |dir: &Path, name: &str| {
+            let out = std::process::Command::new("git")
+                .args(["rev-parse", name])
+                .current_dir(dir)
                 .output()
-                .unwrap()
-                .stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_string();
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let head = rev(wt_path, "HEAD");
         let origin = f.dir.path().join("origin.git");
         git(f.dir.path(), &["clone", "-q", "-b", "main", origin.to_str().unwrap(), "other"]);
         let other = f.dir.path().join("other");
@@ -2538,17 +2537,15 @@ esac
         f.state.host_feed.pr(&f.state, &wt.workspace_id, true).await.unwrap();
         feed.until("merged", pr_is(wt.workspace_id.clone(), |p| p["pr"]["state"] == "merged"))
             .await;
+        // Seeing the merge fetches the base; the moved ref invalidates the
+        // worktree's diff, which is now empty.
+        feed.until(
+            "base fetched",
+            is("workspace.diff_changed", "workspace_id", wt.workspace_id.clone()),
+        )
+        .await;
         tokio::time::sleep(Duration::from_millis(500)).await;
         feed.drain(300).await;
-        // Seeing the merge fetches the base, so the worktree's diff empties.
-        let rev = |dir: &Path, name: &str| {
-            let out = std::process::Command::new("git")
-                .args(["rev-parse", name])
-                .current_dir(dir)
-                .output()
-                .unwrap();
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
-        };
         assert_eq!(rev(repo, "origin/main"), rev(&other, "HEAD"));
         let row = workspace::resolve(&f.state.db.conn, &wt.workspace_id).await.unwrap();
         let diff = crate::workspace_diff::diff(&row, None).await.unwrap();
