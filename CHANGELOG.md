@@ -9,7 +9,7 @@ have their own versions and are listed under Compatibility.
 ## [Unreleased]
 
 ### Added
-- None.
+- OpenCode is a supported agent beside Claude Code and Codex. The Host installs it, its free OpenCode Zen models work with no key, and keys for other providers (one per provider) are kept in the Keychain from Settings → Agents.
 
 ### Changed
 - None.
@@ -20,13 +20,13 @@ have their own versions and are listed under Compatibility.
   and the diff empties once its pull request merges.
 
 ### Security
-- None.
+- OpenCode starts with external plugins off: neither your own nor a workspace's `opencode.json` / `.opencode/plugin/` plugins load, since OpenCode would fetch and run them unverified. Zwiim no longer installs OpenCode plugins or writes its `auth.json`.
 
 ### Compatibility
-- None.
+- Protocol revision 34: `agent.save_key` / `agent.remove_key` take `provider` for OpenCode, whose status may read `free` and lists `saved_providers`. Older clients ignore the new fields.
 
 ### Provider changes
-- None.
+- OpenCode 1.19.5 (macOS arm64/x64, Linux x64/arm64 with glibc), installed from npm's signed per-platform packages.
 
 ### Migration notes
 - None.

@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 /** While a sign-in page is open, how often to look for the result. */
 const POLL_MS = 2000;
 
-type Agent = "claude_code" | "codex";
+type Agent = "claude_code" | "codex" | "open_code";
 
 const AGENTS: { id: Agent; label: string; account: string; keyName: string; keyHint: string }[] = [
   {
@@ -19,7 +19,20 @@ const AGENTS: { id: Agent; label: string; account: string; keyName: string; keyH
     keyHint: "sk-ant-…",
   },
   { id: "codex", label: "Codex", account: "ChatGPT account", keyName: "OpenAI API key", keyHint: "sk-…" },
+  // No account sign-in: free models, or a key per provider.
+  { id: "open_code", label: "OpenCode", account: "opencode auth login", keyName: "API key", keyHint: "" },
 ];
+
+/** The providers Desktop offers an OpenCode key for; the host checks the id. */
+const OPENCODE_PROVIDERS = [
+  { id: "opencode", name: "OpenCode Zen" },
+  { id: "anthropic", name: "Anthropic" },
+  { id: "openrouter", name: "OpenRouter" },
+  { id: "groq", name: "Groq" },
+  { id: "deepseek", name: "DeepSeek" },
+];
+
+const providerName = (id: string) => OPENCODE_PROVIDERS.find((p) => p.id === id)?.name ?? id;
 
 /**
  * How the host's agents sign in to their providers. The host keeps every
@@ -35,6 +48,7 @@ export function AgentsSettings({ remote }: { remote: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [key, setKey] = useState("");
+  const [provider, setProvider] = useState(OPENCODE_PROVIDERS[0]!.id);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -79,11 +93,16 @@ export function AgentsSettings({ remote }: { remote: boolean }) {
   const signIn = () => run("sign-in", () => controller.client.request("agent.sign_in", { agent }));
   const saveKey = () =>
     run("save-key", async () => {
-      const next = await controller.client.request("agent.save_key", { agent, key });
+      const next = await controller.client.request(
+        "agent.save_key",
+        agent === "open_code" ? { agent, provider, key } : { agent, key },
+      );
       setKey("");
       return next;
     });
   const removeKey = () => run("remove-key", () => controller.client.request("agent.remove_key", { agent }));
+  const removeProviderKey = (p: string) =>
+    run(`remove-key-${p}`, () => controller.client.request("agent.remove_key", { agent, provider: p }));
   const signOut = () =>
     run("sign-out", async () => {
       setConfirmSignOut(false);
@@ -133,6 +152,69 @@ export function AgentsSettings({ remote }: { remote: boolean }) {
             <p className="text-muted-foreground" data-testid="agent-remote">
               Sign in on the Mac running Zwiim.
             </p>
+          ) : agent === "open_code" ? (
+            <>
+              <div className="flex flex-col gap-1.5 rounded-md border p-3" data-testid="agent-key">
+                <span className="font-medium">API keys</span>
+                {(status.saved_providers ?? []).map((p) => (
+                  <div key={p} className="flex items-center gap-2" data-testid={`agent-provider-${p}`}>
+                    <span>{providerName(p)}</span>
+                    <span className="text-muted-foreground">Saved on this Mac</span>
+                    <Button
+                      className="ml-auto"
+                      size="xs"
+                      variant="ghost"
+                      disabled={disabled}
+                      onClick={() => void removeProviderKey(p)}
+                    >
+                      {busy === `remove-key-${p}` && <Loader2 className="animate-spin" />}
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+                <form
+                  className="flex items-center gap-1.5"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (key.trim()) void saveKey();
+                  }}
+                >
+                  <select
+                    className="bg-input/30 rounded-md border px-1.5 py-1 text-xs"
+                    aria-label="Provider"
+                    value={provider}
+                    onChange={(e) => setProvider(e.target.value)}
+                  >
+                    {OPENCODE_PROVIDERS.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className="bg-input/30 min-w-0 flex-1 rounded-md border px-2 py-1 font-mono text-xs"
+                    type="password"
+                    aria-label={`${providerName(provider)} API key`}
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={key}
+                    onChange={(e) => setKey(e.target.value)}
+                  />
+                  <Button size="xs" variant="outline" type="submit" disabled={disabled || !key.trim()}>
+                    {busy === "save-key" && <Loader2 className="animate-spin" />}
+                    {busy === "save-key"
+                      ? "Saving…"
+                      : status.saved_providers?.includes(provider)
+                        ? "Replace key"
+                        : "Save key"}
+                  </Button>
+                </form>
+                <p className="text-muted-foreground">
+                  OpenCode's free models need no key. Keys are kept in this Mac's Keychain; a provider signed in
+                  with opencode auth login uses its own.
+                </p>
+              </div>
+            </>
           ) : (
             <>
               <div className="flex flex-col gap-1.5 rounded-md border p-3" data-testid="agent-account">
@@ -247,7 +329,7 @@ export function AgentsSettings({ remote }: { remote: boolean }) {
   );
 }
 
-const METHODS = { api_key: "API key", cloud: "Cloud provider" } as const;
+const METHODS = { api_key: "API key", cloud: "Cloud provider", free: "Free models" } as const;
 
 function StatusRow({ status, account }: { status: AgentAuthStatus; account: string }) {
   const method = status.method === "account" ? account : status.method ? METHODS[status.method] : null;

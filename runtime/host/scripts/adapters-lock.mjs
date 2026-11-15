@@ -1,9 +1,17 @@
 #!/usr/bin/env node
 // Regenerates runtime/host/resources/adapters/adapters.lock.json: the exact
 // Node runtime and npm package trees the Host installs as its managed Claude
-// and Codex adapters.
+// and Codex adapters, and the native OpenCode binary.
 //
-//   node runtime/host/scripts/adapters-lock.mjs claude=0.99.0 codex=2.4.0
+//   node runtime/host/scripts/adapters-lock.mjs claude=0.99.0 codex=2.4.0 opencode=1.19.5
+//
+// An adapter left off the command line keeps its entry from the current lock,
+// so bumping one never re-resolves another's dependency tree.
+//
+// OpenCode is its own executable, published as one npm package per platform.
+// Those packages are locked directly (no `npm install`, so the `opencode-ai`
+// wrapper's postinstall never runs), each extracted to the same directory;
+// exactly one applies to each platform the Host supports.
 //
 // For every package it records the tarball URL, the registry's sha512
 // integrity and the registry's ECDSA signature over
@@ -28,14 +36,23 @@ const PACKAGES = {
   claude: { package: "@agentclientprotocol/claude-agent-acp", cmd: "claude-agent-acp" },
   codex: { package: "@agentclientprotocol/codex-acp", cmd: "codex-acp" },
 };
+const NATIVE = {
+  opencode: {
+    packages: ["opencode-darwin-arm64", "opencode-darwin-x64", "opencode-linux-x64", "opencode-linux-arm64"],
+    path: "opencode",
+    bin: "bin/opencode",
+    args: ["acp"],
+  },
+};
 
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, "..", "resources", "adapters", "adapters.lock.json");
 
 const pins = Object.fromEntries(process.argv.slice(2).map((a) => a.split("=")));
-for (const id of Object.keys(PACKAGES)) {
-  if (!pins[id]) throw new Error(`missing ${id}=<version>`);
+for (const id of Object.keys(pins)) {
+  if (!PACKAGES[id] && !NATIVE[id]) throw new Error(`unknown adapter ${id}`);
 }
+const current = JSON.parse(readFileSync(out, "utf8"));
 
 async function json(url) {
   const res = await fetch(url);
@@ -55,6 +72,41 @@ const keys = (await json(`${REGISTRY}/-/npm/v1/keys`)).keys
   .filter((k) => k.keytype === "ecdsa-sha2-nistp256")
   .map((k) => ({ keyid: k.keyid, key: k.key, expires: k.expires }));
 if (!keys.some((k) => k.expires === null)) throw new Error("no current npm registry signing key");
+
+// The registry signature on `meta`, from a key valid when it was published.
+function signature(what, meta, published) {
+  const valid = (k) => k.expires === null || published < new Date(k.expires);
+  const sig = (meta.dist.signatures ?? []).find((s) =>
+    keys.some((k) => k.keyid === s.keyid && valid(k)),
+  );
+  if (!sig) throw new Error(`${what}: no registry signature from a key valid at publication`);
+  return { keyid: sig.keyid, sig: sig.sig };
+}
+
+async function native(id, version) {
+  const { packages: names, path, bin, args } = NATIVE[id];
+  const packages = [];
+  for (const name of names) {
+    const packument = await json(`${REGISTRY}/${name}`);
+    const meta = packument.versions[version];
+    if (!meta) throw new Error(`${name}@${version} is not published`);
+    if (meta.scripts?.preinstall || meta.scripts?.install || meta.scripts?.postinstall) {
+      throw new Error(`${name} has an install script`);
+    }
+    if (meta.libc) throw new Error(`${name} is libc-specific; lock the glibc build`);
+    packages.push({
+      path,
+      name,
+      version,
+      url: meta.dist.tarball,
+      integrity: meta.dist.integrity,
+      signature: signature(name, meta, new Date(packument.time[version])),
+      ...(meta.os ? { os: meta.os } : {}),
+      ...(meta.cpu ? { cpu: meta.cpu } : {}),
+    });
+  }
+  return { version, runtime: "native", entry: `${path}/${bin}`, args, packages };
+}
 
 async function adapter(id, version) {
   const { package: name, cmd } = PACKAGES[id];
@@ -81,18 +133,14 @@ async function adapter(id, version) {
     const published = new Date(packument.time[entry.version]);
     if (meta.dist.integrity !== entry.integrity) throw new Error(`${path}: integrity mismatch`);
     if (meta.dist.tarball !== entry.resolved) throw new Error(`${path}: tarball mismatch`);
-    const valid = (k) => k.expires === null || published < new Date(k.expires);
-    const sig = (meta.dist.signatures ?? []).find((s) =>
-      keys.some((k) => k.keyid === s.keyid && valid(k)),
-    );
-    if (!sig) throw new Error(`${path}: no registry signature from a key valid at publication`);
+    const sig = signature(path, meta, published);
     packages.push({
       path,
       name: real,
       version: entry.version,
       url: entry.resolved,
       integrity: entry.integrity,
-      signature: { keyid: sig.keyid, sig: sig.sig },
+      signature: sig,
       ...(entry.os ? { os: entry.os } : {}),
       ...(entry.cpu ? { cpu: entry.cpu } : {}),
       ...(entry.libc ? { libc: entry.libc } : {}),
@@ -141,8 +189,11 @@ const result = {
   node: await node(),
   adapters: {},
 };
-for (const [id, version] of Object.entries(pins)) {
-  result.adapters[id] = await adapter(id, version);
+for (const id of [...Object.keys(PACKAGES), ...Object.keys(NATIVE)]) {
+  const version = pins[id];
+  if (version) result.adapters[id] = NATIVE[id] ? await native(id, version) : await adapter(id, version);
+  else if (current.adapters[id]) result.adapters[id] = current.adapters[id];
+  else throw new Error(`missing ${id}=<version>`);
 }
 writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
 console.log(`wrote ${out}`);

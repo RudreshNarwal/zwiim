@@ -993,6 +993,23 @@ fn merge_antigravity_settings(
     Ok((root != before).then_some(root))
 }
 
+/// OpenCode launch policy. `OPENCODE_PURE` keeps every external plugin out —
+/// the user's and any a workspace declares in `opencode.json` or ships under
+/// `.opencode/plugin/` — since OpenCode fetches them from npm unverified and
+/// runs them in its own process; its bundled plugins still load. OpenCode has
+/// no switch for project plugins alone (`OPENCODE_DISABLE_PROJECT_CONFIG` would
+/// also drop the project's `AGENTS.md`). `OPENCODE_DISABLE_AUTOUPDATE`: the
+/// Host owns the locked version. Both override any user-set value.
+fn apply_opencode_env_policy(agent_type: AgentType, merged: &mut Vec<(String, String)>) {
+    if agent_type != AgentType::OpenCode {
+        return;
+    }
+    for (key, value) in crate::adapters::ManagedAdapter::OpenCode.launch_env() {
+        merged.retain(|(k, _)| k != key);
+        merged.push((key.to_string(), value.to_string()));
+    }
+}
+
 /// Codex-only launch policy: force codex-acp's MCP name-conflict de-duplication
 /// OFF. Zwiim injects its companion server (`zwiim-mcp`) over ACP
 /// `session/new.mcpServers`; codex-acp otherwise drops any ACP-passed server
@@ -2083,9 +2100,25 @@ async fn build_agent(
             // verbatim by the frontend catch block in
             // `src/contexts/acp-connections-context.tsx` to surface a
             // localized install prompt. Do not change the wording.
-            let cached =
-                crate::acp::binary_cache::find_best_cached_binary_for_agent(agent_type, cmd)?;
+            // OpenCode launches from its managed install only (see
+            // `crate::adapters`), with the arguments the lock names.
+            let managed = crate::adapters::launch(agent_type).transpose()?;
+            let cached = match managed {
+                Some(_) => None,
+                None => {
+                    crate::acp::binary_cache::find_best_cached_binary_for_agent(agent_type, cmd)?
+                }
+            };
             let binary_path = match cached {
+                _ if managed.is_some() => {
+                    let launch = managed.as_ref().expect("guarded");
+                    tracing::info!(
+                        "[ACP][{}] Using managed {}",
+                        meta.name,
+                        launch.version.as_deref().unwrap_or("development copy")
+                    );
+                    launch.program.clone()
+                }
                 Some((path, cached_version)) => {
                     if cached_version == registry_version {
                         tracing::info!(
@@ -2123,7 +2156,10 @@ async fn build_agent(
                 .map(|m| m.len())
                 .unwrap_or(0);
             let mut server = McpServerStdio::new(meta.name, &binary_str);
-            let mut cmd_args: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
+            let mut cmd_args: Vec<String> = match &managed {
+                Some(launch) => launch.args.clone(),
+                None => args.iter().map(|a| (*a).to_string()).collect(),
+            };
             // Cursor's ROOT-level `--model <id>` flag precedes the `acp`
             // subcommand and sets the session's default model. Sourced from
             // the Cursor panel's default-model control (env_json key
@@ -2161,6 +2197,7 @@ async fn build_agent(
             // desktop launch never inherits the shell rc line the vendor's
             // installer appended.
             prepend_agent_install_dirs_path(&mut merged_env, agent_type);
+            apply_opencode_env_policy(agent_type, &mut merged_env);
             if agent_type == AgentType::Cursor {
                 apply_cursor_env_policy(&mut merged_env, runtime_env);
             } else if agent_type == AgentType::Grok {
@@ -15910,6 +15947,19 @@ pub(crate) async fn emit_conversation_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_launch_env_turns_external_plugins_off() {
+        let mut env = vec![("OPENCODE_PURE".to_string(), "0".to_string())];
+        apply_opencode_env_policy(AgentType::OpenCode, &mut env);
+        assert_eq!(merged_value(&env, "OPENCODE_PURE"), Some("1"));
+        assert_eq!(merged_value(&env, "OPENCODE_DISABLE_AUTOUPDATE"), Some("1"));
+        assert_eq!(env.len(), 2, "{env:?}");
+
+        let mut codex = vec![("OPENCODE_PURE".to_string(), "0".to_string())];
+        apply_opencode_env_policy(AgentType::Codex, &mut codex);
+        assert_eq!(codex, [("OPENCODE_PURE".to_string(), "0".to_string())]);
+    }
     use sacp::schema::{Diff, SessionConfigId};
 
     #[cfg(unix)]

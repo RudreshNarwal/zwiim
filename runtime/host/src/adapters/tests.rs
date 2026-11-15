@@ -270,6 +270,7 @@ impl World {
             platform: self.platform,
             fetch: &self.fetch,
             probe_timeout: Duration::from_secs(10),
+            env: &[],
             downloads: None,
         }
     }
@@ -740,7 +741,9 @@ fn the_committed_lock_matches_the_registry_pins() {
             adapter.id()
         );
         let tree = &lock.adapters[adapter.id()];
-        assert!(tree.entry.starts_with("node_modules/"), "{}", tree.entry);
+        if tree.runtime == super::lock::Runtime::Node {
+            assert!(tree.entry.starts_with("node_modules/"), "{}", tree.entry);
+        }
     }
     let apple_silicon = Platform {
         os: "darwin",
@@ -748,6 +751,7 @@ fn the_committed_lock_matches_the_registry_pins() {
     };
     assert!(lock.digest("claude", apple_silicon).is_some());
     assert!(lock.digest("codex", apple_silicon).is_some());
+    assert!(lock.digest("opencode", apple_silicon).is_some());
 }
 
 #[test]
@@ -851,5 +855,209 @@ fn claude_counts_as_signed_in_with_a_key_credentials_file_or_keychain_item() {
     assert!(
         claude_signed_in(&none, &nothing_inherited, dir.path(), &no_item),
         "file"
+    );
+}
+
+// ─── native adapters ────────────────────────────────────────────────────
+
+/// An adapter that is its own executable: it answers `initialize` only when
+/// started as `<bin> acp`.
+fn native_script(version: &str, guard: &str) -> String {
+    format!(
+        "#!/bin/sh\n[ \"$1\" = acp ] || exit 3\n{guard}{}",
+        adapter_script(version, true)
+    )
+}
+
+impl World {
+    /// Publish a native `opencode` release: one binary package for this
+    /// platform and one for another, both extracted to `opencode/`.
+    fn publish_native(&self, v: &str) -> Lock {
+        self.publish_native_with(v, "")
+    }
+
+    /// [`World::publish_native`], whose binary first runs `guard`.
+    fn publish_native_with(&self, v: &str, guard: &str) -> Lock {
+        let here = targz(&[
+            ("package/package.json", 0o644, "{}"),
+            ("package/bin/opencode", 0o755, &native_script(v, guard)),
+        ]);
+        let url = format!("https://registry.test/opencode-here-{v}.tgz");
+        let elsewhere_os = if self.platform.os == "darwin" {
+            "linux"
+        } else {
+            "darwin"
+        };
+        let package = |name: &str, url: &str, bytes: &[u8], os: &str| {
+            let integrity = sri(bytes);
+            serde_json::json!({
+                "path": "opencode",
+                "name": name,
+                "version": v,
+                "url": url,
+                "integrity": integrity,
+                "signature": {"keyid": self.signer.keyid, "sig": self.signer.sign(&format!("{name}@{v}:{integrity}"))},
+                "os": [os],
+                "cpu": [self.platform.cpu],
+            })
+        };
+        let packages = vec![
+            package("opencode-here", &url, &here, self.platform.os),
+            package(
+                "opencode-elsewhere",
+                "https://registry.test/never.tgz",
+                b"never",
+                elsewhere_os,
+            ),
+        ];
+        self.fetch.serve(&url, here);
+        let lock = serde_json::json!({
+            "schema": 1,
+            "registry_keys": [{"keyid": self.signer.keyid, "key": self.signer.spki(), "expires": null}],
+            "node": {"version": NODE_VERSION, "platforms": {}},
+            "adapters": {
+                "opencode": {
+                    "version": v,
+                    "runtime": "native",
+                    "entry": "opencode/bin/opencode",
+                    "args": ["acp"],
+                    "packages": packages,
+                },
+            },
+        });
+        Lock::parse(&lock.to_string()).unwrap()
+    }
+}
+
+#[test]
+fn node_adapter_lock_serializes_without_native_fields() {
+    let lock = Lock::embedded();
+    for id in ["claude", "codex"] {
+        let json = serde_json::to_value(&lock.adapters[id]).unwrap();
+        assert!(json.get("runtime").is_none(), "{id}: {json}");
+        assert!(json.get("args").is_none(), "{id}: {json}");
+    }
+}
+
+#[tokio::test]
+async fn a_native_adapter_installs_without_node() {
+    let w = World::new();
+    let lock = w.publish_native("1.19.5");
+
+    let outcome = w.installer(&lock).ensure("opencode").await.unwrap();
+    assert!(
+        matches!(outcome, Outcome::Installed { ref version, .. } if version == "1.19.5"),
+        "{outcome:?}"
+    );
+    // The binary only: no Node runtime, no other platform's package.
+    assert_eq!(w.fetch.fetched(), 1);
+    assert_eq!(w.dirs("node"), Vec::<String>::new());
+
+    let installed = install::active(w.root(), "opencode").unwrap();
+    assert_eq!(installed.node, None);
+    assert_eq!(
+        installed.argv(),
+        (
+            w.root().join("opencode/1.19.5/opencode/bin/opencode"),
+            vec![std::ffi::OsString::from("acp")],
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_native_package_for_another_platform_is_not_fetched() {
+    let w = World::new();
+    let lock = w.publish_native("1.19.5");
+    w.installer(&lock).ensure("opencode").await.unwrap();
+    assert_eq!(w.fetch.fetched(), 1);
+    assert!(w
+        .root()
+        .join("opencode/1.19.5/opencode/bin/opencode")
+        .is_file());
+}
+
+#[test]
+fn embedded_lock_has_one_opencode_package_per_platform() {
+    let opencode = &Lock::embedded().adapters["opencode"];
+    assert_eq!(opencode.runtime, super::lock::Runtime::Native);
+    assert_eq!(opencode.entry, "opencode/bin/opencode");
+    assert_eq!(opencode.args, ["acp"]);
+    for (os, cpu) in [
+        ("darwin", "arm64"),
+        ("darwin", "x64"),
+        ("linux", "x64"),
+        ("linux", "arm64"),
+    ] {
+        let platform = Platform { os, cpu };
+        let applies = opencode
+            .packages
+            .iter()
+            .filter(|p| p.applies_to(platform))
+            .count();
+        assert_eq!(applies, 1, "{os}-{cpu}");
+    }
+}
+
+#[test]
+fn managed_adapters_are_claude_codex_opencode() {
+    let ids: Vec<&str> = ManagedAdapter::ALL.iter().map(|a| a.id()).collect();
+    assert_eq!(ids, ["claude", "codex", "opencode"]);
+    assert_eq!(
+        ManagedAdapter::for_agent(AgentType::OpenCode),
+        Some(ManagedAdapter::OpenCode)
+    );
+    assert_eq!(ManagedAdapter::OpenCode.agent(), AgentType::OpenCode);
+    assert_eq!(ManagedAdapter::OpenCode.label(), "OpenCode");
+}
+
+#[tokio::test]
+async fn managed_opencode_launches_its_binary_with_acp_once() {
+    let w = World::new();
+    let lock = w.publish_native("1.19.5");
+    w.installer(&lock).ensure("opencode").await.unwrap();
+    let launch = resolve(w.root(), ManagedAdapter::OpenCode, None).unwrap();
+    assert_eq!(launch.source, Source::Managed);
+    assert_eq!(launch.version.as_deref(), Some("1.19.5"));
+    assert_eq!(
+        launch.argv(),
+        [
+            w.root()
+                .join("opencode/1.19.5/opencode/bin/opencode")
+                .to_string_lossy()
+                .into_owned(),
+            "acp".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_development_opencode_on_path_starts_with_acp() {
+    let w = World::new();
+    let bin = w.root().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let opencode = bin.join("opencode");
+    std::fs::write(&opencode, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(
+        &opencode,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let dev = resolve(w.root(), ManagedAdapter::OpenCode, Some(bin.as_os_str())).unwrap();
+    assert_eq!(dev.source, Source::DevPath);
+    assert_eq!(dev.args, ["acp"]);
+}
+
+#[tokio::test]
+async fn a_native_adapter_is_probed_with_its_launch_env() {
+    let w = World::new();
+    // An OpenCode that only answers when started the way the Host launches
+    // it: external plugins off.
+    let lock = w.publish_native_with("1.19.5", "[ \"$OPENCODE_PURE\" = 1 ] || exit 4\n");
+    let mut installer = w.installer(&lock);
+    installer.env = ManagedAdapter::OpenCode.launch_env();
+    let outcome = installer.ensure("opencode").await;
+    assert!(
+        matches!(outcome, Ok(Outcome::Installed { .. })),
+        "{outcome:?}"
     );
 }

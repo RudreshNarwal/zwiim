@@ -2,6 +2,7 @@
 //! handshake. It proves the installed tree loads and speaks ACP on this
 //! machine, without a session and without credentials.
 
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -17,10 +18,16 @@ pub struct ProbeInfo {
     pub agent_version: Option<String>,
 }
 
-pub async fn initialize(node: &Path, entry: &Path, limit: Duration) -> Result<ProbeInfo, String> {
+pub async fn initialize(
+    program: &Path,
+    args: &[OsString],
+    env: &[(&str, &str)],
+    limit: Duration,
+) -> Result<ProbeInfo, String> {
     let scratch = tempfile::tempdir().map_err(|e| format!("probe scratch dir: {e}"))?;
-    let mut child = crate::process::tokio_command(node)
-        .arg(entry)
+    let mut child = crate::process::tokio_command(program)
+        .args(args)
+        .envs(env.iter().copied())
         .current_dir(scratch.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -56,9 +56,33 @@ pub struct NodeArtifact {
 #[serde(deny_unknown_fields)]
 pub struct AdapterLock {
     pub version: String,
-    /// The script Node runs, relative to the adapter's install directory.
+    /// What runs the adapter. Left out of the lock for Node, so the Node
+    /// adapters' entries (and their digests) read as they always did.
+    #[serde(default, skip_serializing_if = "Runtime::is_node")]
+    pub runtime: Runtime,
+    /// Relative to the adapter's install directory: the script Node runs, or
+    /// for a native adapter the executable itself.
     pub entry: String,
+    /// Arguments after the entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
     pub packages: Vec<PackageLock>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Runtime {
+    /// A script run by the locked Node.
+    #[default]
+    Node,
+    /// An executable that needs no Node (OpenCode).
+    Native,
+}
+
+impl Runtime {
+    pub fn is_node(&self) -> bool {
+        *self == Runtime::Node
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,14 +153,17 @@ impl Lock {
     }
 
     /// A fingerprint of everything installed for `adapter` on `platform`:
-    /// its package tree and the Node it runs on. An install records it, so a
-    /// changed lock is never mistaken for the tree already on disk.
+    /// its package tree and, for a Node adapter, the Node it runs on. An
+    /// install records it, so a changed lock is never mistaken for the tree
+    /// already on disk.
     pub fn digest(&self, adapter: &str, platform: Platform) -> Option<String> {
         let tree = self.adapters.get(adapter)?;
-        let node = self.node.platforms.get(&platform.key())?;
         let mut hasher = Sha256::new();
         hasher.update(serde_json::to_vec(tree).ok()?);
-        hasher.update(serde_json::to_vec(node).ok()?);
+        if tree.runtime == Runtime::Node {
+            let node = self.node.platforms.get(&platform.key())?;
+            hasher.update(serde_json::to_vec(node).ok()?);
+        }
         Some(format!("{:x}", hasher.finalize()))
     }
 }

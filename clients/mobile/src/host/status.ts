@@ -175,6 +175,7 @@ export function hostRowState(
 const AGENT_NAMES: Record<string, { name: string; account: string }> = {
   claude_code: { name: "Claude", account: "Claude subscription" },
   codex: { name: "Codex", account: "ChatGPT account" },
+  open_code: { name: "OpenCode", account: "opencode auth login" },
 };
 
 /**
@@ -195,7 +196,9 @@ export function agentSignInRow(status: AgentAuthStatus): {
         ? "API key"
         : status.method === "cloud"
           ? "Cloud provider"
-          : null;
+          : status.method === "free"
+            ? "Free models"
+            : null;
   const state = status.sign_in === "running" ? "Signing in…" : status.connected ? (method ?? "Signed in") : "Not signed in";
   const detail = [status.email, status.plan].filter(Boolean).join(" · ") || null;
   return { name: known.name, state, detail, dot: status.sign_in === "running" ? "work" : status.connected ? "done" : "idle" };

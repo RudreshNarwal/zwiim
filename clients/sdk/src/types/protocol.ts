@@ -1993,7 +1993,8 @@ export interface HostUpdateApply {
 }
 
 /** How an agent is signed in on the Host. */
-export type AgentAuthMethod = "account" | "api_key" | "cloud";
+/** `free`: OpenCode with no sign-in, on its free models (revision 34). */
+export type AgentAuthMethod = "account" | "api_key" | "cloud" | "free";
 
 /** `agent.auth_status`: an agent's sign-in on the Host. Never a key or a path. */
 export interface AgentAuthStatus {
@@ -2008,6 +2009,8 @@ export interface AgentAuthStatus {
   /** The signed-in account's, when the method is `account`. */
   email: string | null;
   plan: string | null;
+  /** OpenCode: the providers an API key is saved for; absent when none (revision 34). */
+  saved_providers?: string[];
 }
 
 /** How the Host's `gh` is signed in to GitHub. `unavailable`: gh is not installed. */
@@ -2056,8 +2059,9 @@ export interface Operations {
   /** Open the provider's sign-in page on the Host's Mac; asking again starts over (local authority). */
   "agent.sign_in": [{ agent: AgentType }, AgentAuthStatus];
   /** Keep an API key in the Host's Keychain; never returned (local authority). */
-  "agent.save_key": [{ agent: AgentType; key: string }, AgentAuthStatus];
-  "agent.remove_key": [{ agent: AgentType }, AgentAuthStatus];
+  /** `provider` (a models.dev id) is required for `open_code` and refused for the others. */
+  "agent.save_key": [{ agent: AgentType; key: string; provider?: string }, AgentAuthStatus];
+  "agent.remove_key": [{ agent: AgentType; provider?: string }, AgentAuthStatus];
   /** Delete the saved key, sign the account out, end the agent's running sessions (local authority). */
   "agent.sign_out": [{ agent: AgentType }, AgentAuthStatus];
   "workspace.list": [Record<string, never>, WorkspaceInfo[]];

@@ -1740,6 +1740,84 @@
           }
         }
       ]
+    },
+    "opencode": {
+      "version": "1.19.5",
+      "runtime": "native",
+      "entry": "opencode/bin/opencode",
+      "args": [
+        "acp"
+      ],
+      "packages": [
+        {
+          "path": "opencode",
+          "name": "opencode-darwin-arm64",
+          "version": "1.19.5",
+          "url": "https://registry.npmjs.org/opencode-darwin-arm64/-/opencode-darwin-arm64-1.19.5.tgz",
+          "integrity": "sha512-0MbSbKkmwVHtgP31GJyyECe6QVy4T7W4Wp7s2TsmXHTPPyf01ne3dWSX97X9dkNK28Lc6kt+zMPQUP/9GgDLZg==",
+          "signature": {
+            "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+            "sig": "MEYCIQDUskG04vG40cTy42WVZtPVAfZpyVGh08AMULHyHHjC1wIhAJ4HorkPK27uZjALjzgKsqBasR2d03xwtmBpc1kBShvR"
+          },
+          "os": [
+            "darwin"
+          ],
+          "cpu": [
+            "arm64"
+          ]
+        },
+        {
+          "path": "opencode",
+          "name": "opencode-darwin-x64",
+          "version": "1.19.5",
+          "url": "https://registry.npmjs.org/opencode-darwin-x64/-/opencode-darwin-x64-1.19.5.tgz",
+          "integrity": "sha512-+DO7IMPTCrX12UJXnL4pL3ckcwR6BR6f6tA9QIlVQ5nZx66T5U7FRMJT4n5rsOnJxLM/pZ2vfX1G8vrnvXO8FA==",
+          "signature": {
+            "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+            "sig": "MEQCIGUPNvyjTMhLTykXWaF6E45I+cEydtxDQR5LgOUdO+WhAiAMt26ay6P+m+k9hPISg3CYcfgctFVosVAOiI7mLUHQ+Q=="
+          },
+          "os": [
+            "darwin"
+          ],
+          "cpu": [
+            "x64"
+          ]
+        },
+        {
+          "path": "opencode",
+          "name": "opencode-linux-x64",
+          "version": "1.19.5",
+          "url": "https://registry.npmjs.org/opencode-linux-x64/-/opencode-linux-x64-1.19.5.tgz",
+          "integrity": "sha512-i1qh7VooLGML9xX6ud93y0JA8j/1aPeDYRKjsmYXrJX1TjIWHgBBMkEbEJPZthpWbsJg//XfBgR6Kb7+NPaJiQ==",
+          "signature": {
+            "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+            "sig": "MEQCIG2o2UeIjdZBV+AoiIoM95cg2JND+m9+lHcAlJE4MwikAiAJpOiKw7Ltvo18fwIo2BUmH94/RyL2ThjMw9uCERBcsw=="
+          },
+          "os": [
+            "linux"
+          ],
+          "cpu": [
+            "x64"
+          ]
+        },
+        {
+          "path": "opencode",
+          "name": "opencode-linux-arm64",
+          "version": "1.19.5",
+          "url": "https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.19.5.tgz",
+          "integrity": "sha512-u2HFRI6v1nNMVKiV34An8XrGBxJeZ+RCg2tYu3SqlGODKqKsr5RoEbaX1tnsfGb+rETh9AJVX9kS8dSZXPufsA==",
+          "signature": {
+            "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+            "sig": "MEQCIDj0JVlkVNndyniuMnDMEVzzZAlO99QDVf08OQuCrIudAiBvDlxDPfd5rgAL63/THsx4YYEygdYxFe4hfOhbrASXQA=="
+          },
+          "os": [
+            "linux"
+          ],
+          "cpu": [
+            "arm64"
+          ]
+        }
+      ]
     }
   }
 }

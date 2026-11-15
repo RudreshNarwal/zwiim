@@ -103,8 +103,12 @@ describe("evaluateCompatibility", () => {
     expect(CLIENT_CAPABILITIES).toContain("repository.settings_import");
   });
 
+  it("speaks revision 34 (OpenCode)", () => {
+    expect(CLIENT_REVISION).toBe(34);
+  });
+
   it("speaks revision 33 and uses the Host browser", () => {
-    expect(CLIENT_REVISION).toBe(33);
+    expect(CLIENT_REVISION).toBeGreaterThanOrEqual(33);
     expect(CLIENT_CAPABILITIES).toContain("browser");
   });
 

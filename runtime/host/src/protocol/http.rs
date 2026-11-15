@@ -736,12 +736,43 @@ pub struct AgentAuthParams {
 pub struct AgentSaveKeyParams {
     pub agent: AgentType,
     pub key: String,
+    /// OpenCode only: the provider the key is for.
+    #[serde(default)]
+    pub provider: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRemoveKeyParams {
+    pub agent: AgentType,
+    /// OpenCode only: the provider whose key goes.
+    #[serde(default)]
+    pub provider: Option<String>,
 }
 
 fn auth_adapter(agent: AgentType) -> Result<crate::adapters::ManagedAdapter, ZwiimError> {
     crate::adapters::ManagedAdapter::for_agent(agent).ok_or_else(|| {
-        ZwiimError::invalid_request("only Claude Code and Codex sign in on the host")
+        ZwiimError::invalid_request("only Claude Code, Codex and OpenCode sign in on the host")
     })
+}
+
+/// OpenCode's key is per provider and needs one; Claude's and Codex's take
+/// none.
+fn key_provider(
+    adapter: crate::adapters::ManagedAdapter,
+    provider: Option<String>,
+) -> Result<Option<String>, ZwiimError> {
+    use crate::adapters::ManagedAdapter;
+    match (adapter, provider) {
+        (ManagedAdapter::OpenCode, Some(provider)) => Ok(Some(provider)),
+        (ManagedAdapter::OpenCode, None) => Err(ZwiimError::invalid_request(
+            "an OpenCode key needs its provider",
+        )),
+        (_, Some(_)) => Err(ZwiimError::invalid_request(
+            "only OpenCode keys name a provider",
+        )),
+        (_, None) => Ok(None),
+    }
 }
 
 fn auth_error(e: crate::agent_auth::AuthError) -> ZwiimError {
@@ -770,7 +801,8 @@ async fn auth_status_of(
     crate::agent_auth::status(agent, &env).expect("a managed agent has a sign-in status")
 }
 
-/// `agent.auth_status`: how Claude Code and Codex are signed in on this host.
+/// `agent.auth_status`: how Claude Code, Codex and OpenCode are signed in on
+/// this host.
 /// Read fresh on every call.
 pub async fn agent_auth_status(
     Extension(state): Extension<Arc<AppState>>,
@@ -790,6 +822,11 @@ pub async fn agent_sign_in(
     ZJson(params): ZJson<AgentAuthParams>,
 ) -> ZResult<crate::agent_auth::AgentAuthStatus> {
     let adapter = auth_adapter(params.agent)?;
+    if adapter == crate::adapters::ManagedAdapter::OpenCode {
+        return Err(ZwiimError::invalid_request(
+            "OpenCode signs in with API keys",
+        ));
+    }
     crate::agent_auth::start_sign_in(adapter).map_err(auth_error)?;
     Ok(Json(auth_status_of(&state, adapter).await))
 }
@@ -801,12 +838,18 @@ pub async fn agent_save_key(
     Extension(state): Extension<Arc<AppState>>,
     ZJson(params): ZJson<AgentSaveKeyParams>,
 ) -> ZResult<crate::agent_auth::AgentAuthStatus> {
-    let AgentSaveKeyParams { agent, key } = params;
+    let AgentSaveKeyParams {
+        agent,
+        key,
+        provider,
+    } = params;
     let key = zeroize::Zeroizing::new(key);
     let adapter = auth_adapter(agent)?;
-    crate::agent_auth::save_key(adapter, &key)
-        .await
-        .map_err(auth_error)?;
+    match key_provider(adapter, provider)? {
+        Some(provider) => crate::agent_auth::save_provider_key(&provider, &key).await,
+        None => crate::agent_auth::save_key(adapter, &key).await,
+    }
+    .map_err(auth_error)?;
     mark_sessions_stale(&state, agent).await;
     Ok(Json(auth_status_of(&state, adapter).await))
 }
@@ -815,12 +858,14 @@ pub async fn agent_save_key(
 /// only).
 pub async fn agent_remove_key(
     Extension(state): Extension<Arc<AppState>>,
-    ZJson(params): ZJson<AgentAuthParams>,
+    ZJson(params): ZJson<AgentRemoveKeyParams>,
 ) -> ZResult<crate::agent_auth::AgentAuthStatus> {
     let adapter = auth_adapter(params.agent)?;
-    crate::agent_auth::remove_key(adapter)
-        .await
-        .map_err(auth_error)?;
+    match key_provider(adapter, params.provider)? {
+        Some(provider) => crate::agent_auth::remove_provider_key(&provider).await,
+        None => crate::agent_auth::remove_key(adapter).await,
+    }
+    .map_err(auth_error)?;
     mark_sessions_stale(&state, params.agent).await;
     Ok(Json(auth_status_of(&state, adapter).await))
 }
@@ -2067,13 +2112,13 @@ pub async fn terminal_spawn(
         Some(agent) => {
             use crate::adapters::ManagedAdapter;
             let adapter = ManagedAdapter::for_agent(agent).ok_or_else(|| {
-                ZwiimError::invalid_request("only Claude Code and Codex run in a terminal")
+                ZwiimError::invalid_request("only Claude Code, Codex and OpenCode run in a terminal")
             })?;
             // Claude Code runs a slash command given as its first prompt;
             // Codex would send it to the model, so it is pasted in instead.
             let (prompt, paste) = match adapter {
                 ManagedAdapter::Claude => (p.command, None),
-                ManagedAdapter::Codex => (None, p.command),
+                ManagedAdapter::Codex | ManagedAdapter::OpenCode => (None, p.command),
             };
             let line = crate::agent_auth::vendor_cli_line(adapter, prompt.as_deref())
                 .map_err(auth_error)?;

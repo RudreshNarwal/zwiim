@@ -5021,11 +5021,11 @@ async fn agent_list_reports_availability_only() {
 }
 
 #[tokio::test]
-async fn agent_list_marks_claude_and_codex_supported_and_host_managed() {
+async fn agent_list_marks_managed_agents_supported() {
     let h = host(false).await;
     let list = h.ok("agent.list", json!({})).await;
     for a in list.as_array().unwrap() {
-        let managed = a["agent"] == "claude_code" || a["agent"] == "codex";
+        let managed = ["claude_code", "codex", "open_code"].contains(&a["agent"].as_str().unwrap());
         if managed {
             assert_eq!(a["support"], "supported", "{a}");
             let adapter = &a["adapter"];
@@ -5086,7 +5086,10 @@ async fn agent_sign_in_status_reaches_every_client_and_never_a_key() {
             .iter()
             .map(|s| s["agent"].clone())
             .collect();
-        assert_eq!(agents, [json!("claude_code"), json!("codex")]);
+        assert_eq!(
+            agents,
+            [json!("claude_code"), json!("codex"), json!("open_code")]
+        );
         assert!(!all.to_string().contains(key), "{all}");
         let mut fields: Vec<_> = all[1].as_object().unwrap().keys().cloned().collect();
         fields.sort();
@@ -5113,6 +5116,101 @@ async fn agent_sign_in_status_reaches_every_client_and_never_a_key() {
         assert_eq!(removed["saved_key"], false, "{removed}");
     })
     .await;
+}
+
+#[tokio::test]
+async fn save_key_for_open_code_needs_a_known_api_provider() {
+    let h = host(false).await;
+    let key = "sk-or-test-protocol-0001";
+    // Without a provider, an OpenCode key has nowhere to go.
+    let (status, value) = h
+        .call("agent.save_key", json!({"agent": "open_code", "key": key}))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(value["error"]["code"], "invalid_request");
+    assert!(!value.to_string().contains(key), "{value}");
+    // A provider that is unknown, or signs in another way, takes no key.
+    for provider in ["nope", "openai"] {
+        let (status, value) = h
+            .call(
+                "agent.save_key",
+                json!({"agent": "open_code", "key": key, "provider": provider}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{provider}");
+        assert_eq!(value["error"]["code"], "invalid_input", "{provider}");
+        assert!(!value.to_string().contains(key), "{value}");
+    }
+
+    let saved = h
+        .ok(
+            "agent.save_key",
+            json!({"agent": "open_code", "key": key, "provider": "openrouter"}),
+        )
+        .await;
+    assert_eq!(saved["agent"], "open_code");
+    assert_eq!(saved["connected"], true, "{saved}");
+    assert_eq!(saved["saved_key"], true, "{saved}");
+    assert_eq!(saved["saved_providers"], json!(["openrouter"]), "{saved}");
+    assert!(!saved.to_string().contains(key), "{saved}");
+    let all = h.ok("agent.auth_status", json!({})).await;
+    assert!(!all.to_string().contains(key), "{all}");
+
+    // A provider is needed to remove one too.
+    let (status, code) = h
+        .err("agent.remove_key", json!({"agent": "open_code"}))
+        .await;
+    assert_eq!(
+        (status, code.as_str()),
+        (StatusCode::BAD_REQUEST, "invalid_request")
+    );
+    let removed = h
+        .ok(
+            "agent.remove_key",
+            json!({"agent": "open_code", "provider": "openrouter"}),
+        )
+        .await;
+    assert_eq!(removed["saved_key"], false, "{removed}");
+    assert!(removed.get("saved_providers").is_none(), "{removed}");
+}
+
+#[tokio::test]
+async fn save_key_refuses_a_provider_for_claude_and_codex() {
+    let h = host(false).await;
+    for agent in ["claude_code", "codex"] {
+        let (status, code) = h
+            .err(
+                "agent.save_key",
+                json!({"agent": agent, "key": "sk-ant-x-0001", "provider": "anthropic"}),
+            )
+            .await;
+        assert_eq!(
+            (status, code.as_str()),
+            (StatusCode::BAD_REQUEST, "invalid_request"),
+            "{agent}"
+        );
+        let (status, code) = h
+            .err(
+                "agent.remove_key",
+                json!({"agent": agent, "provider": "anthropic"}),
+            )
+            .await;
+        assert_eq!(
+            (status, code.as_str()),
+            (StatusCode::BAD_REQUEST, "invalid_request"),
+            "{agent}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn open_code_has_no_browser_sign_in() {
+    let h = host(false).await;
+    let (status, code) = h.err("agent.sign_in", json!({"agent": "open_code"})).await;
+    assert_eq!(
+        (status, code.as_str()),
+        (StatusCode::BAD_REQUEST, "invalid_request")
+    );
 }
 
 #[tokio::test]
@@ -5861,7 +5959,7 @@ async fn diagnostics_report_versions_and_state_without_secrets() {
     assert_eq!(d["update"]["supported"], false, "{d}");
     assert_eq!(d["update"]["unsupported_reason"], "unsigned_build");
     assert_eq!(d["database"]["schema"]["state"], "current", "{d}");
-    for adapter in ["claude", "codex"] {
+    for adapter in ["claude", "codex", "opencode"] {
         let a = &d["adapters"][adapter];
         assert!(a["locked_version"].is_string(), "{d}");
         assert!(a["authenticated"].is_boolean(), "{d}");

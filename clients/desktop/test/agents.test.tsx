@@ -49,11 +49,23 @@ function hostWithAgents() {
       plan: "Claude Max",
     }),
     codex: idle("codex"),
+    open_code: idle("open_code", { connected: true, method: "free" }),
   };
   t.handlers["agent.auth_status"] = () => Object.values(state);
-  t.handlers["agent.save_key"] = ({ agent }) =>
-    (state[agent] = { ...state[agent]!, saved_key: true, connected: true, method: "api_key" });
-  t.handlers["agent.remove_key"] = ({ agent }) => (state[agent] = idle(agent));
+  t.handlers["agent.save_key"] = ({ agent, provider }) =>
+    (state[agent] = {
+      ...state[agent]!,
+      saved_key: true,
+      connected: true,
+      method: "api_key",
+      ...(provider ? { saved_providers: [...(state[agent]!.saved_providers ?? []), provider] } : {}),
+    });
+  t.handlers["agent.remove_key"] = ({ agent, provider }) => {
+    const left = (state[agent]!.saved_providers ?? []).filter((p) => p !== provider);
+    return (state[agent] = provider
+      ? { ...state[agent]!, saved_providers: left, saved_key: left.length > 0, method: left.length ? "api_key" : "free" }
+      : idle(agent));
+  };
   t.handlers["agent.sign_out"] = ({ agent }) => (state[agent] = idle(agent));
   t.handlers["agent.sign_in"] = ({ agent }) => (state[agent] = { ...state[agent]!, sign_in: "running" });
   return { t, state };
@@ -168,7 +180,49 @@ describe("agent sign-in", () => {
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
     expect(screen.queryByLabelText("Anthropic API key")).toBeNull();
-    expect(within(screen.getByRole("tablist")).getAllByRole("tab")).toHaveLength(2);
+    expect(within(screen.getByRole("tablist")).getAllByRole("tab")).toHaveLength(3);
     controller.dispose();
+  });
+
+  it("runs OpenCode free with no key, and keeps a key per provider", async () => {
+    const { t } = hostWithAgents();
+    const c = await mountWorkbench(t);
+    const dialog = openSettings("Agents");
+    await tick();
+
+    fireEvent.click(dialog.getByRole("tab", { name: "OpenCode" }));
+    const status = dialog.getByTestId("agent-status");
+    expect(status.textContent).toContain("Connected");
+    expect(status.textContent).toContain("Free models");
+    // No browser sign-in for OpenCode, and nothing to sign out of yet.
+    expect(dialog.queryByTestId("agent-account")).toBeNull();
+    expect(dialog.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(dialog.queryByRole("button", { name: "Sign out" })).toBeNull();
+
+    fireEvent.change(dialog.getByLabelText("Provider"), { target: { value: "openrouter" } });
+    const input = dialog.getByLabelText("OpenRouter API key") as HTMLInputElement;
+    expect(input.type).toBe("password");
+    fireEvent.change(input, { target: { value: "sk-or-test-0123" } });
+    fireEvent.click(dialog.getByRole("button", { name: "Save key" }));
+    await tick();
+    expect(t.calls.find((x) => x.op === "agent.save_key")?.params).toEqual({
+      agent: "open_code",
+      provider: "openrouter",
+      key: "sk-or-test-0123",
+    });
+    expect(input.value).toBe("");
+    const saved = dialog.getByTestId("agent-provider-openrouter");
+    expect(saved.textContent).toContain("OpenRouter");
+    expect(dialog.getByTestId("settings-agents").textContent).not.toContain("sk-or-test");
+
+    fireEvent.click(within(saved).getByRole("button", { name: "Remove" }));
+    await tick();
+    expect(t.calls.find((x) => x.op === "agent.remove_key")?.params).toEqual({
+      agent: "open_code",
+      provider: "openrouter",
+    });
+    expect(dialog.queryByTestId("agent-provider-openrouter")).toBeNull();
+    expect(dialog.getByTestId("agent-status").textContent).toContain("Free models");
+    c.dispose();
   });
 });

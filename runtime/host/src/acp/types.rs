@@ -1207,7 +1207,6 @@ pub struct AcpAgentInfo {
     pub host_tools_agent_mode: bool,
     pub config_json: Option<String>,
     pub config_file_path: Option<String>,
-    pub opencode_auth_json: Option<String>,
     pub codex_auth_json: Option<String>,
     pub codex_config_toml: Option<String>,
     /// Compact structured codex model-catalog source (the `zwiim` custom-model
