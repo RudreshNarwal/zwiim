@@ -15,7 +15,9 @@ have their own versions and are listed under Compatibility.
 - None.
 
 ### Fixed
-- None.
+- A worktree's diff shows only what its base branch doesn't have yet: a
+  branch started from a newer base no longer lists changes already merged,
+  and the diff empties once its pull request merges.
 
 ### Security
 - None.

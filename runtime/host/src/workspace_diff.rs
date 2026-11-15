@@ -1,14 +1,17 @@
 //! Zwiim-owned read-only workspace diff (`git.diff`).
 //!
 //! One combined view of everything that differs from the workspace's base:
-//! - a worktree is compared against `merge-base(base_commit, HEAD)`, so its
-//!   committed, staged and unstaged changes all show;
+//! - a worktree is compared against where it forked from its base branch, so
+//!   its committed, staged and unstaged changes all show, and leaves out what
+//!   the base branch already has: once its pull request lands, the diff is
+//!   empty;
 //! - a root workspace (or a worktree with no recorded base) is compared
 //!   against its own `HEAD`: its uncommitted changes.
 //!
 //! Untracked files show as added; ignored files never show. Binary and
 //! oversized files are listed without content. Symlinks are never followed.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use serde::Serialize;
@@ -93,10 +96,49 @@ async fn stdout_ok(dir: &str, what: &str, args: &[&str]) -> Result<Vec<u8>, AppC
     Ok(out.stdout)
 }
 
-/// The commit (or empty tree) workspace `row` is compared against.
-async fn base_of(row: &folder::Model) -> Result<Option<String>, AppCommandError> {
+/// `rev` as a commit id, when it names one.
+async fn commit_of(dir: &str, rev: &str) -> Option<String> {
+    if rev.starts_with('-') {
+        return None;
+    }
+    let spec = format!("{rev}^{{commit}}");
+    let out = run(dir, &["rev-parse", "--verify", "--quiet", &spec])
+        .await
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// The tip of worktree `row`'s base branch: the remote-tracking ref the
+/// Host fetches when there is one, else the branch as recorded.
+async fn base_tip(row: &folder::Model) -> Option<String> {
+    row.parent_id?;
+    let branch = row.base_branch.as_deref()?;
+    let tracking = crate::git_harness::conflict_base(Path::new(&row.path), true, Some(branch))
+        .await
+        .ok()
+        .flatten();
+    match tracking {
+        Some(base) => commit_of(&row.path, &format!("refs/remotes/{base}")).await,
+        None => commit_of(&row.path, branch).await,
+    }
+}
+
+/// The commit (or empty tree) workspace `row` is compared against: for a
+/// worktree, the newest commit `HEAD` shares with its recorded base or its
+/// base branch, so a branch cut or updated from a newer base compares
+/// against that.
+async fn base_of(
+    row: &folder::Model,
+    tip: Option<&str>,
+) -> Result<Option<String>, AppCommandError> {
     if let (Some(_), Some(base)) = (row.parent_id, row.base_commit.as_deref()) {
-        let out = stdout_ok(&row.path, "merge-base", &["merge-base", base, "HEAD"]).await?;
+        let mut args = vec!["merge-base", "HEAD", base];
+        if let Some(tip) = tip {
+            args.push(tip);
+        }
+        let out = stdout_ok(&row.path, "merge-base", &args).await?;
         return Ok(Some(String::from_utf8_lossy(&out).trim().to_string()));
     }
     let head = run(&row.path, &["rev-parse", "--verify", "HEAD^{commit}"]).await?;
@@ -165,6 +207,41 @@ async fn tracked(dir: &str, base: &str) -> Result<Vec<DiffFile>, AppCommandError
         });
     }
     Ok(files)
+}
+
+/// Whether commit `descendant` has commit `ancestor` in its history.
+async fn has_ancestor(dir: &str, descendant: &str, ancestor: &str) -> bool {
+    run(dir, &["merge-base", "--is-ancestor", ancestor, descendant])
+        .await
+        .is_ok_and(|out| out.status.success())
+}
+
+async fn names(dir: &str, args: &[&str]) -> Result<HashSet<String>, AppCommandError> {
+    let mut all = vec!["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z"];
+    all.extend(args);
+    Ok(fields(&stdout_ok(dir, "diff", &all).await?).collect())
+}
+
+/// The paths the base branch at `tip` does not have yet: those merging
+/// `HEAD` into it would change, and those with uncommitted changes. `None`
+/// when this Git cannot run a would-be merge.
+async fn unlanded(dir: &str, tip: &str) -> Result<Option<HashSet<String>>, AppCommandError> {
+    let out = run(
+        dir,
+        &["merge-tree", "--write-tree", "--no-messages", tip, "HEAD"],
+    )
+    .await?;
+    // 0 merges cleanly, 1 with conflicts; both write the merged tree.
+    if !matches!(out.status.code(), Some(0 | 1)) {
+        return Ok(None);
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let Some(merged) = stdout.lines().next() else {
+        return Ok(None);
+    };
+    let mut paths = names(dir, &[tip, merged]).await?;
+    paths.extend(names(dir, &["HEAD"]).await?);
+    Ok(Some(paths))
 }
 
 /// Describe untracked file `rel` without following symlinks.
@@ -281,10 +358,19 @@ pub async fn diff(
     file: Option<&str>,
 ) -> Result<WorkspaceDiff, AppCommandError> {
     crate::git_repo::ensure_git_repo(&row.path)?;
-    let base_commit = base_of(row).await?;
+    let tip = base_tip(row).await;
+    let base_commit = base_of(row, tip.as_deref()).await?;
     let base = base_commit.as_deref().unwrap_or(EMPTY_TREE);
 
     let mut files = tracked(&row.path, base).await?;
+    if let Some(tip) = tip.as_deref() {
+        // A base branch not fetched past `base` cannot have landed anything.
+        if has_ancestor(&row.path, tip, base).await {
+            if let Some(unlanded) = unlanded(&row.path, tip).await? {
+                files.retain(|f| unlanded.contains(&f.path));
+            }
+        }
+    }
     files.extend(untracked(&row.path).await?);
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
@@ -483,6 +569,129 @@ mod tests {
                 "{path}"
             );
         }
+    }
+
+    fn paths(d: &WorkspaceDiff) -> Vec<&str> {
+        d.files.iter().map(|f| f.path.as_str()).collect()
+    }
+
+    /// Once the base branch has the worktree's changes (a squash merge of
+    /// its pull request), nothing is left to show but later edits.
+    #[tokio::test]
+    async fn a_landed_branch_shows_only_what_came_after() {
+        let (_dir, root, wt) = repo_and_worktree().await;
+        assert!(wt.base_branch.is_some());
+        let (r, w) = (Path::new(&root.path), Path::new(&wt.path));
+        // The squash is a commit of its own on the base branch.
+        for (dir, message) in [(w, "feature"), (r, "squash")] {
+            std::fs::write(dir.join("feature.txt"), "f\n").unwrap();
+            std::fs::write(dir.join("edit.txt"), "a\nB\n").unwrap();
+            git(dir, &["add", "-A"]);
+            git(dir, &["commit", "-q", "-m", message]);
+        }
+        std::fs::write(r.join("other.txt"), "o\n").unwrap();
+        git(r, &["add", "."]);
+        git(r, &["commit", "-q", "-m", "someone else"]);
+        assert!(diff(&wt, None).await.unwrap().files.is_empty());
+        let err = diff(&wt, Some("feature.txt")).await.unwrap_err();
+        assert!(matches!(err.code, crate::app_error::AppErrorCode::NotFound));
+
+        std::fs::write(w.join("feature.txt"), "f2\n").unwrap();
+        assert_eq!(paths(&diff(&wt, None).await.unwrap()), ["feature.txt"]);
+    }
+
+    /// A landed file stays hidden when the base branch edits it again.
+    #[tokio::test]
+    async fn a_landed_file_edited_again_on_the_base_stays_hidden() {
+        let (_dir, root, wt) = repo_and_worktree().await;
+        let (r, w) = (Path::new(&root.path), Path::new(&wt.path));
+        let lines = |edit: &[(usize, &str)]| {
+            let mut lines: Vec<String> = (0..10).map(|i| format!("line {i}")).collect();
+            for (i, text) in edit {
+                lines[*i] = text.to_string();
+            }
+            lines.join("\n") + "\n"
+        };
+        std::fs::write(r.join("long.txt"), lines(&[])).unwrap();
+        git(r, &["add", "."]);
+        git(r, &["commit", "-q", "-m", "long"]);
+        git(
+            w,
+            &[
+                "checkout",
+                "-q",
+                "-b",
+                "next",
+                &git(r, &["rev-parse", "HEAD"]),
+            ],
+        );
+        for (dir, message) in [(w, "ours"), (r, "squash")] {
+            std::fs::write(dir.join("long.txt"), lines(&[(1, "ours")])).unwrap();
+            git(dir, &["commit", "-q", "-am", message]);
+        }
+        std::fs::write(r.join("long.txt"), lines(&[(1, "ours"), (8, "theirs")])).unwrap();
+        git(r, &["commit", "-q", "-am", "theirs"]);
+
+        assert!(diff(&wt, None).await.unwrap().files.is_empty());
+    }
+
+    /// A base branch recorded by name follows its remote-tracking ref, the
+    /// one the Host fetches.
+    #[tokio::test]
+    async fn a_named_base_follows_its_remote_tracking_ref() {
+        let (dir, root, mut wt) = repo_and_worktree().await;
+        let (r, w) = (Path::new(&root.path), Path::new(&wt.path));
+        let origin = dir.path().join("origin.git");
+        git(
+            dir.path(),
+            &["init", "-q", "--bare", origin.to_str().unwrap()],
+        );
+        git(r, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        git(r, &["push", "-q", "origin", "main"]);
+        std::fs::write(w.join("feature.txt"), "f\n").unwrap();
+        git(w, &["add", "."]);
+        git(w, &["commit", "-q", "-m", "feature"]);
+        // The pull request lands on origin; the local `main` stays behind.
+        let clone = dir.path().join("clone");
+        git(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                "-b",
+                "main",
+                origin.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
+        std::fs::write(clone.join("feature.txt"), "f\n").unwrap();
+        git(&clone, &["add", "."]);
+        git(&clone, &["commit", "-q", "-m", "squash"]);
+        git(&clone, &["push", "-q", "origin", "main"]);
+        git(r, &["fetch", "-q", "origin"]);
+
+        wt.base_branch = Some("main".into());
+        assert!(diff(&wt, None).await.unwrap().files.is_empty());
+    }
+
+    /// A branch started from a newer base compares against that base, not
+    /// the one the worktree was made from.
+    #[tokio::test]
+    async fn a_branch_cut_from_a_newer_base_compares_against_it() {
+        let (_dir, root, wt) = repo_and_worktree().await;
+        let (r, w) = (Path::new(&root.path), Path::new(&wt.path));
+        std::fs::write(r.join("later.txt"), "l\n").unwrap();
+        git(r, &["add", "."]);
+        git(r, &["commit", "-q", "-m", "later"]);
+        let tip = git(r, &["rev-parse", "HEAD"]);
+        git(w, &["checkout", "-q", "-b", "next", &tip]);
+        std::fs::write(w.join("new.txt"), "n\n").unwrap();
+        git(w, &["add", "."]);
+        git(w, &["commit", "-q", "-m", "new"]);
+
+        let d = diff(&wt, None).await.unwrap();
+        assert_eq!(d.base_commit.as_deref(), Some(tip.as_str()));
+        assert_eq!(paths(&d), ["new.txt"]);
     }
 
     #[tokio::test]
