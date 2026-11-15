@@ -7543,6 +7543,67 @@ async fn browser_frames_reach_the_stream_socket() {
     );
 }
 
+/// A page slow to take input holds back neither its frames nor the
+/// viewer's next input.
+#[tokio::test]
+async fn browser_frames_keep_coming_while_input_waits_on_the_page() {
+    let h = host(true).await;
+    let fake = fake_browser(&h).await;
+    let tab = h
+        .ok("browser.tab.open", json!({"owner": {"kind": "personal"}}))
+        .await;
+    let tab_id = tab["tab_id"].as_str().unwrap();
+    let view = json!({"tab_id": tab_id, "viewport": {"width": 800, "height": 600}});
+    let stream_id = h.ok("browser.view.open", view).await["stream_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut ws = stream_socket(&h, &stream_id, HOST_TOKEN)
+        .await
+        .into_websocket()
+        .await;
+    let (_, session) = h
+        .state
+        .browser
+        .get()
+        .unwrap()
+        .session(tab_id)
+        .await
+        .unwrap();
+    for _ in 0..200 {
+        if !fake.calls("Page.startScreencast").is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    fake.lock().hold_input = true;
+    let wheel = json!({"type": "mouse", "action": "wheel", "x": 10, "y": 10, "delta_y": 120});
+    ws.send_text(wheel.to_string()).await;
+    ws.send_text(wheel.to_string()).await;
+    for _ in 0..200 {
+        if !fake.calls("Input.dispatchMouseEvent").is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    fake.emit(
+        "Page.screencastFrame",
+        json!({
+            "data": base64::engine::general_purpose::STANDARD.encode(b"JPEG"),
+            "sessionId": 9,
+            "metadata": {"deviceWidth": 800, "deviceHeight": 600, "pageScaleFactor": 1,
+                "scrollOffsetX": 0, "scrollOffsetY": 0, "offsetTop": 0, "timestamp": 1.0}
+        }),
+        Some(&session),
+    );
+    let frame = tokio::time::timeout(Duration::from_secs(5), ws.receive_bytes())
+        .await
+        .expect("the frame came while the wheel waited on the page");
+    assert_eq!(&frame[crate::browser::stream::HEADER_LEN..], b"JPEG");
+    // In order: the second wheel waits for the first.
+    assert_eq!(fake.calls("Input.dispatchMouseEvent").len(), 1);
+}
+
 #[tokio::test]
 async fn browser_views_refuse_bad_input_and_devices() {
     let h = host(true).await;

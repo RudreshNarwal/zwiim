@@ -61,6 +61,9 @@ pub struct FakeState {
     pub paused_sessions: std::collections::HashSet<String>,
     /// `Page.navigate` never answers, as for a page waiting on a sign-in.
     pub hold_navigations: bool,
+    /// `Input.dispatchMouseEvent` never answers, as for a page too busy to
+    /// take input.
+    pub hold_input: bool,
     /// `Page.navigate` fails with this `errorText`, as for an unknown host.
     pub nav_error: Option<String>,
     /// `IO.read` calls so far.
@@ -222,7 +225,8 @@ impl FakeEngine {
                     buf.pop();
                     let req: Value = serde_json::from_slice(&buf).unwrap();
                     buf.clear();
-                    let held = req["method"] == "Page.navigate" && self.lock().hold_navigations;
+                    let held = (req["method"] == "Page.navigate" && self.lock().hold_navigations)
+                        || (req["method"] == "Input.dispatchMouseEvent" && self.lock().hold_input);
                     let reply = self.answer(&req, &events_tx);
                     if held { continue; }
                     let mut msg = match reply {

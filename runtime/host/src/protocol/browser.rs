@@ -866,7 +866,28 @@ async fn run_stream(
     mut viewer: crate::browser::stream::Viewer,
     shutdown: Arc<crate::web::shutdown::ShutdownSignal>,
 ) {
+    use crate::browser::input::Input;
     use axum::extract::ws::Message;
+    // Input goes to the tab in order on its own task, so a page slow to take
+    // it holds back neither frames nor the next input read; it ends when
+    // `inputs` drops with this socket.
+    let (inputs, mut queued) = tokio::sync::mpsc::unbounded_channel::<Input>();
+    let (failed, mut failures) = tokio::sync::mpsc::unbounded_channel::<ZwiimError>();
+    let deliver = viewer.input_handle();
+    tokio::spawn(async move {
+        while let Some(input) = queued.recv().await {
+            if let Err(e) = deliver.input(&input).await {
+                let _ = failed.send(ZwiimError::from(e));
+            }
+        }
+    });
+    let error = |e: ZwiimError| {
+        let frame = json!({
+            "type": "error",
+            "error": { "code": e.code, "message": e.message },
+        });
+        Message::Text(frame.to_string().into())
+    };
     loop {
         tokio::select! {
             frame = viewer.next() => {
@@ -876,22 +897,23 @@ async fn run_stream(
                 }
                 viewer.sent(&frame);
             }
+            Some(e) = failures.recv() => {
+                if socket.send(error(e)).await.is_err() {
+                    return;
+                }
+            }
             msg = socket.recv() => match msg {
-                Some(Ok(Message::Text(text))) => {
-                    let done = match serde_json::from_str::<crate::browser::input::Input>(&text) {
-                        Ok(input) => viewer.input(&input).await.map_err(ZwiimError::from),
-                        Err(e) => Err(ZwiimError::invalid_request(format!("Invalid input: {e}"))),
-                    };
-                    if let Err(e) = done {
-                        let frame = json!({
-                            "type": "error",
-                            "error": { "code": e.code, "message": e.message },
-                        });
-                        if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
+                Some(Ok(Message::Text(text))) => match serde_json::from_str::<Input>(&text) {
+                    Ok(input) => {
+                        let _ = inputs.send(input);
+                    }
+                    Err(e) => {
+                        let e = ZwiimError::invalid_request(format!("Invalid input: {e}"));
+                        if socket.send(error(e)).await.is_err() {
                             return;
                         }
                     }
-                }
+                },
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
                 Some(Ok(_)) => {}
             },
