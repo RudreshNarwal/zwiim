@@ -275,6 +275,11 @@ describe("browser panel", () => {
     expect(selected()).toBe("Opened");
     await acts("b");
     expect(selected()).toBe("Bee");
+    // Reading or loading a page, not only acting on it.
+    await act(async () => t.frame({ type: "browser.agent.working", tab_id: "a" } as never));
+    expect(selected()).toBe("Example");
+    await acts("b");
+    expect(selected()).toBe("Bee");
 
     // Not into another session's tab, and not away from the person's own.
     await act(async () => t.frame({ type: "browser.tab.state", tab: tab("o", { owner: { kind: "session", session_id: "s2" } }) } as never));

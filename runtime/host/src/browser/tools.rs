@@ -1548,6 +1548,42 @@ mod tests {
         );
     }
 
+    /// Clients are told which tab the agent works in for every tool, not
+    /// only for the actions that move its pointer.
+    #[tokio::test]
+    async fn clients_are_told_the_tab_an_agent_works_in() {
+        let fake = FakeEngine::default();
+        let browser = browser(&fake).await;
+        let opened = tab_op(
+            &browser,
+            &Worlds::default(),
+            "s1",
+            BrowserTabOp::Open {
+                url: "http://localhost:5173/".into(),
+            },
+        )
+        .await;
+        let tab = opened.tab.unwrap().tab_id;
+        let mut events = browser.subscribe();
+        let _ = console(&browser, "s1", &tab, &ConsoleQuery::default()).await;
+        let working = loop {
+            match events.try_recv() {
+                Ok(super::super::service::BrowserEvent::AgentWorking { tab_id }) => break tab_id,
+                Ok(_) => continue,
+                Err(e) => panic!("no working event: {e:?}"),
+            }
+        };
+        assert_eq!(working, tab);
+        // Another session's agent cannot use the tab, and says nothing.
+        let _ = console(&browser, "s2", &tab, &ConsoleQuery::default()).await;
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(
+                event,
+                super::super::service::BrowserEvent::AgentWorking { .. }
+            ));
+        }
+    }
+
     /// The agent opening the dev server the Host already showed takes that
     /// tab; once the agent has it, another open is a second tab.
     #[tokio::test]

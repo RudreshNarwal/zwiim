@@ -468,6 +468,8 @@ export type BrowserFrame =
   | { type: "browser.ui.done"; request_id: string; tab_id: string }
   /** Sent just before the agent acts. */
   | { type: "browser.agent.action"; action: BrowserAgentAction }
+  /** The agent's browser tools are using this tab: reading, capturing, loading or acting on it (revision 35). */
+  | { type: "browser.agent.working"; tab_id: string }
   | { type: "browser.ui.menu"; menu: BrowserMenu }
   /** A pick ended: the element, or `null` when it was called off, the page went, or nobody picked. */
   | { type: "browser.tab.picked"; tab_id: string; owner: BrowserTabOwner; pick: BrowserPick | null }

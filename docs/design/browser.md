@@ -679,7 +679,10 @@ Both only while the browser tools are on.
 Every action also emits a `browser.agent.action` event (kind, target box,
 label) just before it runs. Clients draw a ghost cursor and a highlight over
 the frame, so the person sees what the agent is about to click, not only that
-the page changed (R1).
+the page changed (R1). Every tool that uses a tab, actions or not, also emits
+`browser.agent.working` with the tab's id; the desktop panel switches to that
+tab unless the person is on a tab of their own, picking an element or typing
+an address.
 
 ### 10.3 Action guards and side effects
 

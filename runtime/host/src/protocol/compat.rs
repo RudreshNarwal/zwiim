@@ -479,7 +479,12 @@ use serde::{Deserialize, Serialize};
 /// models need no sign-in), with method `free` when nothing else applies,
 /// and carries `saved_providers`, the providers a key is saved for (left out
 /// when none). `agent.sign_in` is `invalid_request` for it.
-pub const PROTOCOL_REVISION: u32 = 34;
+///
+/// 35 (`browser.agent.working`): whenever a session's agent uses one of its
+/// tabs through its browser tools (reading, capturing, loading or acting on
+/// it), `browser.subscribe` sends `browser.agent.working {tab_id}`, so a
+/// client can show the tab the agent works in. Older clients ignore it.
+pub const PROTOCOL_REVISION: u32 = 35;
 
 /// Oldest client revision this Host serves. Raise only after a release that
 /// reported `client_deprecated`-era clients (see the R9 design, §5.5).
@@ -708,7 +713,12 @@ mod tests {
 
     #[test]
     fn opencode_is_revision_34() {
-        assert_eq!(PROTOCOL_REVISION, 34);
+        const _: () = assert!(PROTOCOL_REVISION >= 34);
+    }
+
+    #[test]
+    fn the_agents_tab_is_told_from_revision_35() {
+        assert_eq!(PROTOCOL_REVISION, 35);
     }
 
     #[test]

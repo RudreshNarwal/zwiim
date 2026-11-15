@@ -142,10 +142,10 @@ export function BrowserPanel({
     setPicking(null);
   }, [picking, tabId, active, controller]);
   // The panel follows the session's agent to a tab that appears and to the
-  // tab it acts on, unless the person is on a tab of their own, picking an
+  // tab it works in, unless the person is on a tab of their own, picking an
   // element or typing an address.
   const known = useRef<Set<string> | null>(null);
-  const followed = useRef(browser.agentSeq);
+  const followed = useRef(browser.agentTab?.seq ?? 0);
   const follows = () => tab?.owner.kind !== "personal" && !picking && document.activeElement !== address.current;
   useEffect(() => {
     if (browser.status !== "live") {
@@ -158,10 +158,10 @@ export function BrowserPanel({
     if (fresh.length > 0 && follows()) setSelected(fresh.at(-1)!);
   });
   useEffect(() => {
-    if (browser.agentSeq <= followed.current) return;
-    followed.current = browser.agentSeq;
-    const acted = Object.values(browser.agentActions).find((a) => a.seq === browser.agentSeq)?.action.tab_id;
-    if (acted && tabs.some((t) => t.tab_id === acted && t.owner.kind === "session") && follows()) setSelected(acted);
+    const working = browser.agentTab;
+    if (!working || working.seq <= followed.current) return;
+    followed.current = working.seq;
+    if (tabs.some((t) => t.tab_id === working.tab_id && t.owner.kind === "session") && follows()) setSelected(working.tab_id);
   });
   const find = useCallback(
     (query: string, backwards: boolean) =>
