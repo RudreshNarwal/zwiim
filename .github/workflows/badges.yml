@@ -1,0 +1,36 @@
+# The README's Mac downloads badge. Sums, across every release, the Mac
+# installer (.dmg) and the Mac app update (Zwiim_*_aarch64.app.tar.gz)
+# downloads, and publishes the total as a shields.io endpoint file on the
+# `badges` branch, which holds only that file (one commit, replaced each run).
+name: Badges
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 5 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  mac-downloads:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Publish the Mac downloads count
+        run: |
+          count=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq '.[].assets[] | select(.name | test("\\.dmg$|_aarch64\\.app\\.tar\\.gz$")) | .download_count' \
+            | awk '{ s += $1 } END { print s + 0 }')
+          echo "Mac downloads: $count"
+          mkdir badges && cd badges
+          git init -q -b badges
+          printf '{"schemaVersion":1,"label":"Mac downloads","message":"%s","color":"6CB4F0"}\n' "$count" > mac-downloads.json
+          git add mac-downloads.json
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qm "Mac downloads: $count"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
