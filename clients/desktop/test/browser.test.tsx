@@ -261,6 +261,31 @@ describe("browser panel", () => {
     expect(screen.getAllByRole("tab").map((b) => b.textContent)).toContain("New tab");
   });
 
+  it("follows the agent to the tab it opens and the tab it acts on", async () => {
+    const t = new StreamingTransport();
+    t.handlers["browser.view.open"] = () => ({ stream_id: "st1" });
+    t.handlers["browser.view.close"] = () => ({});
+    await mount(t, [tab("a"), tab("b", { title: "Bee", position: 1 }), tab("p", { owner: { kind: "personal" }, title: "Mine" })]);
+    const selected = () => screen.getByRole("tab", { selected: true }).textContent;
+    const acts = (tab_id: string) =>
+      act(async () => t.frame({ type: "browser.agent.action", action: { tab_id, kind: "click", x: 1, y: 1 } } as never));
+    expect(selected()).toBe("Example");
+
+    await act(async () => t.frame({ type: "browser.tab.state", tab: tab("n", { title: "Opened", position: 2 }) } as never));
+    expect(selected()).toBe("Opened");
+    await acts("b");
+    expect(selected()).toBe("Bee");
+
+    // Not into another session's tab, and not away from the person's own.
+    await act(async () => t.frame({ type: "browser.tab.state", tab: tab("o", { owner: { kind: "session", session_id: "s2" } }) } as never));
+    await acts("o");
+    expect(selected()).toBe("Bee");
+    fireEvent.click(screen.getAllByRole("tab").find((b) => b.textContent === "Mine · Mine")!);
+    await acts("a");
+    await act(async () => t.frame({ type: "browser.tab.state", tab: tab("m", { title: "Later", position: 3 }) } as never));
+    expect(selected()).toBe("Mine · Mine");
+  });
+
   it("goes to what the address bar says, and steps through history", async () => {
     const t = new StreamingTransport();
     t.handlers["browser.view.open"] = () => ({ stream_id: "st1" });

@@ -141,6 +141,28 @@ export function BrowserPanel({
     void controller.cancelBrowserPick(picking.tabId).catch(() => {});
     setPicking(null);
   }, [picking, tabId, active, controller]);
+  // The panel follows the session's agent to a tab that appears and to the
+  // tab it acts on, unless the person is on a tab of their own, picking an
+  // element or typing an address.
+  const known = useRef<Set<string> | null>(null);
+  const followed = useRef(browser.agentSeq);
+  const follows = () => tab?.owner.kind !== "personal" && !picking && document.activeElement !== address.current;
+  useEffect(() => {
+    if (browser.status !== "live") {
+      known.current = null;
+      return;
+    }
+    const ids = tabs.filter((t) => t.owner.kind === "session").map((t) => t.tab_id);
+    const fresh = known.current ? ids.filter((id) => !known.current!.has(id)) : [];
+    known.current = new Set(ids);
+    if (fresh.length > 0 && follows()) setSelected(fresh.at(-1)!);
+  });
+  useEffect(() => {
+    if (browser.agentSeq <= followed.current) return;
+    followed.current = browser.agentSeq;
+    const acted = Object.values(browser.agentActions).find((a) => a.seq === browser.agentSeq)?.action.tab_id;
+    if (acted && tabs.some((t) => t.tab_id === acted && t.owner.kind === "session") && follows()) setSelected(acted);
+  });
   const find = useCallback(
     (query: string, backwards: boolean) =>
       tabId ? controller.findInBrowserTab(tabId, query, backwards).catch(() => null) : Promise.resolve(null),
