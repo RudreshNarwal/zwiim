@@ -658,6 +658,8 @@ mod tests {
             &[
                 "clone",
                 "-q",
+                "-b",
+                "main",
                 origin.to_str().unwrap(),
                 clone.to_str().unwrap(),
             ],
