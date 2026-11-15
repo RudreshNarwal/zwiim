@@ -5,6 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-6CB4F0?style=flat" alt="License: Apache-2.0" /></a>
   <a href="https://github.com/zwiim/zwiim/releases"><img src="https://img.shields.io/github/v/release/zwiim/zwiim?include_prereleases&style=flat&color=6CB4F0&label=release" alt="Latest release" /></a>
+  <a href="https://github.com/zwiim/zwiim/releases"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fzwiim%2Fzwiim%2Fbadges%2Fmac-downloads.json&style=flat" alt="Mac downloads" /></a>
   <img src="https://img.shields.io/badge/macOS-Apple%20Silicon-1E2123?style=flat" alt="macOS on Apple Silicon" />
   <img src="https://img.shields.io/badge/phone-iOS%20%7C%20Android-1E2123?style=flat" alt="Phone app for iOS and Android" />
 </p>
